@@ -1,0 +1,4 @@
+enrichmcp
+aiosqlite
+fastapi
+uvicorn[standard] 

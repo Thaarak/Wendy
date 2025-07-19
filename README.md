@@ -1,137 +1,236 @@
 # 💍 Wendy AI Wedding Planner
 
-A comprehensive Next.js 14 wedding planning application with AI assistance, built with TypeScript, Tailwind CSS, and shadcn/ui.
+An AI-powered wedding planning assistant with a modular tool-based architecture.
 
-## Features
+## 🏗️ Architecture
 
-- **Persistent Sidebar Navigation**: Collapsible sidebar with vendor/venue, guests, calendar, chat, and settings pages
-- **Vendor Management**: Grid view of wedding vendors and venues with contact information
-- **Guest Management**: Interactive table with editable RSVP status and dietary preferences
-- **Calendar View**: Timeline of wedding events and appointments
-- **AI Chat Interface**: Chat with Wendy, your AI wedding planning assistant
-- **Action Log**: Real-time activity tracking in bottom-right panel
-- **Responsive Design**: Mobile-friendly with Tailwind CSS
-- **Type Safety**: Full TypeScript implementation with strict mode
+### **Agent Orchestrator Pattern**
+```
+User Message → Agent Orchestrator → Tool Selection → Tool Execution → Response Generation
+```
 
-## Tech Stack
+### **Components:**
 
-- **Framework**: Next.js 14 with App Router
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS
-- **UI Components**: shadcn/ui
-- **State Management**: React Context with useReducer
-- **Icons**: Lucide React
+1. **Agent Orchestrator** (`services/agent/orchestrator.ts`)
+   - Manages AI agent decision-making
+   - Coordinates tool selection and execution
+   - Generates contextual responses
 
-## Getting Started
+2. **Tool Registry** (`services/agent/tools/index.ts`)
+   - Central registry for all available tools
+   - Easy tool discovery and execution
+   - Scalable tool management
 
-### Prerequisites
+3. **Individual Tools** (`services/agent/tools/`)
+   - Each tool in its own file
+   - Consistent interface and error handling
+   - Easy to add new tools
 
-- Node.js 18+ 
-- npm or yarn
+4. **MCP Server** (`mcp-server/`)
+   - FastAPI HTTP server
+   - Custom SQLite database management
+   - Email service integration
 
-### Installation
+## 🚀 Quick Start
 
-1. Clone the repository:
-\`\`\`bash
-git clone <repository-url>
-cd wendy-wedding-planner
-\`\`\`
+### **Prerequisites:**
+- Node.js 18+
+- Python 3.8+
+- pnpm (recommended)
 
-2. Install dependencies:
-\`\`\`bash
-npm install
-\`\`\`
+### **Installation:**
+```bash
+# Install Node.js dependencies
+pnpm install
 
-3. Run the development server:
-\`\`\`bash
-npm run dev
-\`\`\`
+# Install Python dependencies
+cd mcp-server
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+### **Running the Application:**
+```bash
+# Terminal 1: Start the MCP server
+cd mcp-server
+source venv/bin/activate
+python wendy_mcp_server.py
 
-## Project Structure
+# Terminal 2: Start the Next.js app
+pnpm dev
+```
 
-\`\`\`
-src/
-├── app/
-│   ├── (dashboard)/           # Dashboard route group
-│   │   ├── vendors/          # Vendor management page
-│   │   ├── guests/           # Guest list management
-│   │   ├── calendar/         # Event calendar
-│   │   ├── chat/             # AI chat interface
-│   │   ├── settings/         # Settings page
-│   │   └── layout.tsx        # Dashboard layout with sidebar
-│   ├── context/
-│   │   └── wendy-context.tsx # Global state management
-│   ├── globals.css           # Global styles
-│   ├── layout.tsx            # Root layout
-│   └── page.tsx              # Home page (redirects to vendors)
-├── components/
-│   ├── ui/                   # shadcn/ui components
-│   ├── app-sidebar.tsx       # Main navigation sidebar
-│   ├── action-log.tsx        # Activity log component
-│   ├── vendor-card.tsx       # Vendor display card
-│   ├── guest-table.tsx       # Guest management table
-│   ├── full-calendar.tsx     # Calendar component
-│   └── chat-interface.tsx    # Chat UI component
-\`\`\`
+Visit `http://localhost:3000` to access the application.
 
-## State Management
+## 🛠️ Adding New Tools
 
-The app uses a centralized React Context (`useWendyState`) with the following data structure:
+### **1. Create Tool File**
+Create a new file in `services/agent/tools/` (e.g., `add-vendor.ts`):
 
-\`\`\`typescript
-type WendyState = {
-  vendors: Vendor[]     // Wedding vendors and venues
-  guests: Guest[]       // Guest list with RSVP status
-  events: CalEvent[]    // Calendar events and appointments
-  messages: Message[]   // Chat conversation history
-  logs: LogEntry[]      // Activity log entries
+```typescript
+import { getMCPClient } from '../../mcp/client';
+
+export interface AddVendorParams {
+  name: string;
+  email: string;
+  type: 'venue' | 'caterer' | 'photographer';
 }
-\`\`\`
 
-## API Integration Points
+export interface AddVendorResult {
+  success: boolean;
+  message: string;
+  vendorId?: number;
+}
 
-The following TODO comments indicate where API integration should be implemented:
+export async function addVendor(params: AddVendorParams): Promise<AddVendorResult> {
+  try {
+    // Your tool implementation here
+    return {
+      success: true,
+      message: `✅ Added vendor: ${params.name}`,
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `❌ Failed to add vendor: ${error}`,
+    };
+  }
+}
 
-- `POST /api/vendors` - Add new vendor
-- `PUT /api/guests/:id` - Update guest information
-- `POST /api/events` - Create calendar event
-- `POST /api/messages` - Send chat message
-- `POST /api/chat` - AI chat completion
+// Tool metadata
+export const addVendorTool = {
+  name: 'add_vendor',
+  description: 'Add a new vendor to the wedding planning database',
+  parameters: {
+    type: 'object',
+    properties: {
+      name: {
+        type: 'string',
+        description: 'The vendor name',
+      },
+      email: {
+        type: 'string',
+        description: 'The vendor email',
+      },
+      type: {
+        type: 'string',
+        description: 'The vendor type',
+        enum: ['venue', 'caterer', 'photographer'],
+      },
+    },
+    required: ['name', 'email', 'type'],
+  },
+  execute: addVendor,
+};
+```
 
-## Build and Deploy
+### **2. Register the Tool**
+Add to `services/agent/tools/index.ts`:
 
-\`\`\`bash
-# Build for production
-npm run build
+```typescript
+import { addVendorTool } from './add-vendor';
 
-# Start production server
-npm start
+export const TOOL_REGISTRY = {
+  send_invite: sendInviteTool,
+  update_rsvp: updateRSVPTool,
+  add_vendor: addVendorTool, // Add your new tool here
+};
+```
 
-# Run linting
-npm run lint
-\`\`\`
+### **3. Add MCP Server Endpoint**
+Add to `mcp-server/wendy_mcp_server.py`:
 
-## Customization
+```python
+@app.post("/tools/add_vendor", response_model=AddVendorResponse)
+async def add_vendor(request: AddVendorRequest):
+    # Your server implementation here
+    pass
+```
 
-### Brand Colors
-The app uses `indigo-600` as the primary brand color. Update the Tailwind classes throughout the components to change the color scheme.
+### **4. Update MCP Client**
+Add to `services/mcp/client.ts`:
 
-### Adding New Features
-1. Add new action types to the `WendyAction` union in `wendy-context.tsx`
-2. Update the reducer to handle new actions
-3. Create new components in the `components/` directory
-4. Add new routes under `app/(dashboard)/`
+```typescript
+async addVendor(name: string, email: string, type: string): Promise<string> {
+  // Your client implementation here
+}
+```
 
-## Contributing
+## 📁 Project Structure
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run `npm run build` to ensure it builds successfully
-5. Submit a pull request
+```
+Wendy/
+├── app/                    # Next.js app directory
+│   ├── api/               # API routes
+│   ├── (dashboard)/       # Dashboard pages
+│   └── context/           # React context
+├── components/            # React components
+├── services/              # Business logic and services
+│   ├── agent/            # AI agent orchestration
+│   │   ├── orchestrator.ts
+│   │   └── tools/        # Individual tool implementations
+│   │       ├── index.ts  # Tool registry
+│   │       ├── send-invite.ts
+│   │       └── update-rsvp.ts
+│   └── mcp/              # MCP server client
+│       └── client.ts
+├── mcp-server/           # Python MCP server
+│   ├── wendy_mcp_server.py
+│   ├── requirements.txt
+│   └── wedding.db        # SQLite database
+└── public/               # Static assets
+```
 
-## License
+## 🔧 Available Tools
 
-MIT License - see LICENSE file for details.
+### **send_invite**
+- **Purpose**: Send wedding invitations and add guests to database
+- **Parameters**: `email` (required), `name` (optional)
+- **Usage**: "Invite john@example.com"
+
+### **update_rsvp**
+- **Purpose**: Update guest RSVP status
+- **Parameters**: `email` (required), `rsvp` (yes/no/maybe)
+- **Usage**: "Update RSVP for john@example.com to yes"
+
+## 🗄️ Database
+
+We use a **custom SQLite database** managed by the Python MCP server:
+
+- **Location**: `mcp-server/wedding.db`
+- **Schema**: Managed by Python `aiosqlite`
+- **Operations**: All database operations go through the MCP server
+- **Benefits**: Simple, lightweight, no ORM complexity
+
+## 🎯 Benefits of This Architecture
+
+1. **Modularity**: Each tool is self-contained
+2. **Scalability**: Easy to add new tools
+3. **Maintainability**: Clear separation of concerns
+4. **Testability**: Tools can be tested independently
+5. **Flexibility**: AI agent can choose appropriate tools dynamically
+6. **Simplicity**: No complex ORM, direct SQL queries
+
+## 🚀 Deployment
+
+### **Local Development**
+- MCP server runs on `http://localhost:8000`
+- Next.js app runs on `http://localhost:3000`
+
+### **Production**
+- Deploy MCP server to cloud (Heroku, Railway, etc.)
+- Deploy Next.js app to Vercel/Netlify
+- Update MCP client URL for production
+
+## 🤝 Contributing
+
+1. Create new tool files in `services/agent/tools/`
+2. Register tools in `services/agent/tools/index.ts`
+3. Add corresponding MCP server endpoints
+4. Update MCP client if needed
+5. Test thoroughly
+
+## 📝 License
+
+MIT License - feel free to use this architecture for your own projects!

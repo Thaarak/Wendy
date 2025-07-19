@@ -25,7 +25,7 @@ export function ChatInterface({ messages }: ChatInterfaceProps) {
     scrollToBottom()
   }, [messages])
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!inputValue.trim()) return
 
     // Add user message
@@ -38,17 +38,30 @@ export function ChatInterface({ messages }: ChatInterfaceProps) {
 
     dispatch({ type: "add_message", payload: userMessage })
 
-    // TODO: API integration - POST /api/chat with user message
-    // Simulate AI response
-    setTimeout(() => {
+    // API integration - POST /api/chat with user message
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: inputValue }),
+      })
+      const data = await res.json()
       const aiResponse: Message = {
         id: (Date.now() + 1).toString(),
         sender: "wendy",
-        text: `I understand you said: "${inputValue}". I'm here to help with your wedding planning! What specific aspect would you like assistance with?`,
+        text: data.reply || "(No response)",
         ts: new Date().toISOString(),
       }
       dispatch({ type: "add_message", payload: aiResponse })
-    }, 1000)
+    } catch (err) {
+      const errorResponse: Message = {
+        id: (Date.now() + 2).toString(),
+        sender: "wendy",
+        text: "Sorry, there was an error contacting Wendy's brain!",
+        ts: new Date().toISOString(),
+      }
+      dispatch({ type: "add_message", payload: errorResponse })
+    }
 
     setInputValue("")
   }

@@ -1,25 +1,40 @@
 "use client"
 
-import { type Guest, useWendyState } from "@/app/context/wendy-context"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Heart, Mail, Phone, StickyNote } from "lucide-react"
 
-interface GuestTableProps {
-  guests: Guest[]
+// Type for database guest (matches Prisma schema)
+type DatabaseGuest = {
+  id: number
+  name: string
+  email: string
+  rsvp: string
+  createdAt: string
 }
 
-export function GuestTable({ guests }: GuestTableProps) {
-  const { dispatch } = useWendyState()
+interface GuestTableProps {
+  guests: DatabaseGuest[]
+  onGuestUpdate?: () => void // Callback to refresh the guest list
+}
 
-  const handleRsvpChange = (guest: Guest, newRsvp: Guest["rsvp"]) => {
-    dispatch({
-      type: "update_guest",
-      payload: { ...guest, rsvp: newRsvp },
-    })
+export function GuestTable({ guests, onGuestUpdate }: GuestTableProps) {
+  const handleRsvpChange = async (guest: DatabaseGuest, newRsvp: string) => {
+    try {
+      // TODO: Add API endpoint to update guest RSVP
+      // For now, just log the change
+      console.log(`Updating RSVP for ${guest.email} to ${newRsvp}`)
+      
+      // Call the callback to refresh the guest list
+      if (onGuestUpdate) {
+        onGuestUpdate()
+      }
+    } catch (error) {
+      console.error('Error updating RSVP:', error)
+    }
   }
 
-  const getRsvpColor = (rsvp: Guest["rsvp"]) => {
+  const getRsvpColor = (rsvp: string) => {
     switch (rsvp) {
       case "yes":
         return "text-emerald-700 bg-gradient-to-r from-emerald-50 to-green-50 border-emerald-200"
@@ -32,7 +47,7 @@ export function GuestTable({ guests }: GuestTableProps) {
     }
   }
 
-  const getRsvpEmoji = (rsvp: Guest["rsvp"]) => {
+  const getRsvpEmoji = (rsvp: string) => {
     switch (rsvp) {
       case "yes":
         return "💚"
@@ -73,16 +88,16 @@ export function GuestTable({ guests }: GuestTableProps) {
               <TableCell className="font-semibold text-rose-800 serif">{guest.name}</TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
-                  {guest.contact?.includes("@") ? (
+                  {guest.email?.includes("@") ? (
                     <Mail className="h-4 w-4 text-rose-500" />
                   ) : (
                     <Phone className="h-4 w-4 text-rose-500" />
                   )}
-                  <span className="text-rose-700">{guest.contact || "No contact"}</span>
+                  <span className="text-rose-700">{guest.email || "No contact"}</span>
                 </div>
               </TableCell>
               <TableCell>
-                <Select value={guest.rsvp} onValueChange={(value: Guest["rsvp"]) => handleRsvpChange(guest, value)}>
+                <Select value={guest.rsvp} onValueChange={(value: string) => handleRsvpChange(guest, value)}>
                   <SelectTrigger className={`w-40 rounded-xl border ${getRsvpColor(guest.rsvp)} font-semibold`}>
                     <SelectValue />
                   </SelectTrigger>
@@ -96,8 +111,7 @@ export function GuestTable({ guests }: GuestTableProps) {
               </TableCell>
               <TableCell>
                 <div className="flex items-start gap-2">
-                  {guest.notes && <StickyNote className="h-4 w-4 text-rose-500 mt-0.5" />}
-                  <span className="text-rose-700 text-sm">{guest.notes || "None specified"}</span>
+                  <span className="text-rose-700 text-sm">Added via AI invite</span>
                 </div>
               </TableCell>
             </TableRow>

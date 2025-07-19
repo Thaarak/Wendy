@@ -1,12 +1,43 @@
 "use client"
 
-import { useWendyState } from "@/app/context/wendy-context"
+import { useState, useEffect } from "react"
 import { GuestTable } from "@/components/guest-table"
 import { CreateGuestDialog } from "@/components/create-guest-dialog"
 import { Users } from "lucide-react"
 
+// Type for database guest (matches Prisma schema)
+type DatabaseGuest = {
+  id: number
+  name: string
+  email: string
+  rsvp: string
+  createdAt: string
+}
+
 export default function GuestsPage() {
-  const { state } = useWendyState()
+  const [guests, setGuests] = useState<DatabaseGuest[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchGuests = async () => {
+    try {
+      setLoading(true)
+      const response = await fetch('/api/guests')
+      if (!response.ok) {
+        throw new Error('Failed to fetch guests')
+      }
+      const data = await response.json()
+      setGuests(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch guests')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchGuests()
+  }, [])
 
   return (
     <div className="max-w-7xl mx-auto">
@@ -31,7 +62,32 @@ export default function GuestsPage() {
         </div>
       </div>
 
-      {state.guests.length === 0 ? (
+      {loading ? (
+        <div className="text-center py-20">
+          <div className="wedding-card rounded-3xl p-12 max-w-md mx-auto">
+            <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-rose-100 to-pink-100 flex items-center justify-center">
+              <Users className="h-10 w-10 text-rose-400 animate-pulse" />
+            </div>
+            <h3 className="text-2xl font-bold text-rose-800 mb-3 serif">Loading guests...</h3>
+          </div>
+        </div>
+      ) : error ? (
+        <div className="text-center py-20">
+          <div className="wedding-card rounded-3xl p-12 max-w-md mx-auto">
+            <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-red-100 to-pink-100 flex items-center justify-center">
+              <Users className="h-10 w-10 text-red-400" />
+            </div>
+            <h3 className="text-2xl font-bold text-red-800 mb-3 serif">Error loading guests</h3>
+            <p className="text-red-600/70 mb-8 serif">{error}</p>
+            <button 
+              onClick={fetchGuests}
+              className="bg-gradient-to-r from-rose-500 to-pink-500 text-white px-6 py-3 rounded-xl hover:from-rose-600 hover:to-pink-600 transition-all"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      ) : guests.length === 0 ? (
         <div className="text-center py-20">
           <div className="wedding-card rounded-3xl p-12 max-w-md mx-auto">
             <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-rose-100 to-pink-100 flex items-center justify-center">
@@ -43,7 +99,7 @@ export default function GuestsPage() {
           </div>
         </div>
       ) : (
-        <GuestTable guests={state.guests} />
+        <GuestTable guests={guests} onGuestUpdate={fetchGuests} />
       )}
     </div>
   )
