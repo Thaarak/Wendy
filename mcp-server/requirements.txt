@@ -2,6 +2,7 @@ enrichmcp
 aiosqlite
 fastapi
 uvicorn[standard]
-anthropic aiosqlite==0.21.0
+anthropic
+aiosqlite==0.21.0
 fastapi==0.116.1
 uvicorn==0.35.0
