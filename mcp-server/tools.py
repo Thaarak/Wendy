@@ -217,6 +217,145 @@ class UpdateWeddingDetailsTool:
             print(f"❌ Failed to update wedding details: {e}")
             return {"success": False, "message": f"Failed to update wedding details: {e}"}
 
+# --- Tool: Find Venues ---
+class FindVenuesTool:
+    name = "find_venues"
+    description = """
+    Search for wedding venues in a specified location.
+    Input: { "location": "City, State or region" }
+    Output: { "success": true, "venues": [ { "name": ..., "address": ..., "email": ..., "phone": ..., "capacity": ..., "website": ... } ], "message": "Summary or error" }
+    When to use: When the user asks to search for or suggest wedding venues in a location.
+    Example: "Find venues in San Francisco", "Show me wedding venues near Austin, TX"
+    """
+
+    def __init__(self, db, openai_api_key=None):
+        self.db = db
+        self.openai_api_key = openai_api_key
+
+    async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            location = input.get("location")
+            if not location:
+                return {"success": False, "message": "No location provided.", "venues": []}
+
+            # Use OpenAI or a web search API to find venues (stubbed for now)
+            # In production, replace this with a real search or API call
+            venues = [
+                {
+                    "name": "Grand Ballroom Hotel",
+                    "address": f"123 Main St, {location}",
+                    "email": "events@grandballroom.com",
+                    "phone": "+1 (555) 123-4567",
+                    "capacity": "200",
+                    "website": "https://grandballroom.com"
+                },
+                {
+                    "name": "The Plaza Gardens",
+                    "address": f"456 Garden Ave, {location}",
+                    "email": "info@plazagardens.com",
+                    "phone": "+1 (555) 234-5678",
+                    "capacity": "150",
+                    "website": "https://plazagardens.com"
+                }
+            ]
+            return {
+                "success": True,
+                "venues": venues,
+                "message": f"Found {len(venues)} venues in {location}."
+            }
+        except Exception as e:
+            print(f"❌ Failed to find venues: {e}")
+            return {"success": False, "venues": [], "message": f"Failed to find venues: {e}"}
+
+# --- Tool: Make Venue Reservation ---
+class MakeVenueReservationTool:
+    name = "make_venue_reservation"
+    description = """
+    Make a reservation request at a wedding venue.
+    Input: {
+        "user_name": "Name of the person making the reservation",
+        "user_email": "Their email",
+        "venue_name": "Venue to book",
+        "venue_email": "Venue contact email",
+        "budget": "Budget for the venue",
+        "guest_count": Number of guests,
+        "event_date": "YYYY-MM-DD",
+        "special_notes": "Any additional requests" (optional),
+        "context": { ... } (optional, for orchestrator context)
+    }
+    Output: { "success": true, "message": "Reservation sent!", "reservation_id": ... }
+    When to use: When the user asks to book, reserve, or make a reservation at a wedding venue.
+    Example: "Book Grand Ballroom for 120 guests on 2024-10-15"
+    """
+
+    def __init__(self, db, smtp_user, smtp_pass):
+        self.db = db
+        self.smtp_host = "smtp.gmail.com"
+        self.smtp_port = 465
+        self.smtp_user = smtp_user
+        self.smtp_pass = smtp_pass
+
+    async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            required = ["user_name", "user_email", "venue_name", "budget", "guest_count", "event_date"]
+            for field in required:
+                if not input.get(field):
+                    return {"success": False, "message": f"Missing required field: {field}"}
+            venue_email = input.get("venue_email")
+            # If not provided, try to get from context
+            context = input.get("context")
+            if not venue_email and context and "last_venues" in context:
+                venue_name = input.get("venue_name")
+                for venue in context["last_venues"]:
+                    if venue["name"].lower() == venue_name.lower():
+                        venue_email = venue.get("email")
+                        break
+            if not venue_email:
+                return {"success": False, "message": "Venue email not found. Please specify the venue email."}
+
+            # Compose reservation email
+            msg = MIMEText(f"""
+Dear {input['venue_name']},
+
+My name is {input['user_name']} and I am interested in reserving your venue for a wedding.
+
+Details:
+- Date: {input['event_date']}
+- Guest count: {input['guest_count']}
+- Budget: {input['budget']}
+- Special notes: {input.get('special_notes', 'None')}
+
+Please let me know about availability and next steps.
+
+Thank you,
+{input['user_name']}
+{input['user_email']}
+""", 'plain')
+            msg['Subject'] = f"Wedding Venue Reservation Inquiry: {input['event_date']}"
+            msg['From'] = self.smtp_user
+            msg['To'] = venue_email
+
+            # Send email (blocking, so run in thread)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            def send_email():
+                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
+                    server.login(self.smtp_user, self.smtp_pass)
+                    server.send_message(msg)
+            await loop.run_in_executor(None, send_email)
+
+            # Optionally, log reservation in DB (stubbed)
+            # reservation_id = await self.db.add_reservation(...)
+
+            return {
+                "success": True,
+                "message": f"Reservation request sent to {venue_email}",
+                # "reservation_id": reservation_id
+            }
+        except Exception as e:
+            print(f"❌ Failed to make venue reservation: {e}")
+            return {"success": False, "message": f"Failed to make reservation: {e}"}
+
 # --- Tool Registry ---
 class ToolRegistry:
     def __init__(self, db, email_service, smtp_user, smtp_pass, openai_api_key):
@@ -227,6 +366,8 @@ class ToolRegistry:
             FollowUpTool(db, email_service),
             ProcessEmailResponseTool(db, openai_api_key),
             UpdateWeddingDetailsTool(db),  # Register the new tool
+            FindVenuesTool(db, openai_api_key),  # <-- Add this
+            MakeVenueReservationTool(db, smtp_user, smtp_pass),  # <-- Add this
         ]
     def get_tools(self) -> List[Any]:
         return self.tools
