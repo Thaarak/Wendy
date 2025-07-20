@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any, List, Optional
 import json
 
+# Load environment variables from .env
+from dotenv import load_dotenv
+load_dotenv()
+
 import aiosqlite
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -357,6 +361,24 @@ openai_client: openai.OpenAI | None = None
 email_monitor: EmailMonitor | None = None
 agent_orchestrator: AgentOrchestrator | None = None
 
+# --- Persistent context store (in-memory, per user) ---
+user_context_store = {}
+
+def get_user_key(message, context):
+    # Try to extract user email from message or context
+    # This is a simple heuristic; you can improve it as needed
+    if context and isinstance(context, dict):
+        if 'user_email' in context:
+            return context['user_email']
+        if 'sender_email' in context:
+            return context['sender_email']
+    if isinstance(message, str):
+        import re
+        match = re.search(r"[\w\.-]+@[\w\.-]+", message)
+        if match:
+            return match.group(0)
+    return None
+
 
 async def analyze_email_for_rsvp(email_content: str) -> dict:
     """Analyze email content for RSVP information using OpenAI."""
@@ -461,14 +483,20 @@ async def agent_endpoint(request: Request):
     """
     Unified endpoint for chat/email triggers. Accepts JSON: {"message": ..., "context": {...}}
     Calls the agent orchestrator and returns the result.
+    Now persists context per user session (by email) for multi-turn flows.
     """
-    global agent_orchestrator
+    global agent_orchestrator, user_context_store
     data = await request.json()
     message = data.get("message")
     context = data.get("context")
-    if not message:
-        return JSONResponse({"error": "Missing message"}, status_code=400)
+    user_key = get_user_key(message, context)
+    # Load previous context if available
+    if user_key and user_key in user_context_store and not context:
+        context = user_context_store[user_key]
     result = await agent_orchestrator.handle_event(message, context)
+    # Save updated context for this user
+    if user_key and result.get("context"):
+        user_context_store[user_key] = result["context"]
     return JSONResponse(result)
 
 

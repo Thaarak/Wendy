@@ -66,8 +66,25 @@ class AgentOrchestrator:
             {"role": "system", "content": "You are Wendy, an AI wedding planner. Use the available tools to help the user."},
             {"role": "user", "content": message},
         ]
+        # --- Context pruning to avoid context length errors ---
+        pruned_context = None
         if context:
-            messages.append({"role": "system", "content": f"Context: {json.dumps(context)}"})
+            pruned_context = dict(context)
+            # Only keep the most recent 3 venues and only essential fields
+            if "last_venues" in pruned_context and isinstance(pruned_context["last_venues"], list):
+                pruned_venues = []
+                for venue in pruned_context["last_venues"][:3]:
+                    pruned_venues.append({
+                        "name": venue.get("name"),
+                        "email": venue.get("email"),
+                        "address": venue.get("address")
+                    })
+                pruned_context["last_venues"] = pruned_venues
+            # Remove any other large or unnecessary fields
+            for key in list(pruned_context.keys()):
+                if key not in ["last_venues", "pending_tool_call", "user_email", "sender_email"]:
+                    del pruned_context[key]
+            messages.append({"role": "system", "content": f"Context: {json.dumps(pruned_context)}"})
         response = await self.openai_client.chat.completions.create(
             model="gpt-3.5-turbo-1106",
             messages=messages,
@@ -94,23 +111,35 @@ class AgentOrchestrator:
             if tool_name == "send_invite" and pre_parsed_emails and not tool_args.get("email"):
                 tool_args["email"] = pre_parsed_emails[0]
             tool = self.tool_registry.get_tool_by_name(tool_name)
+            # --- Venue context patch ---
+            # If making a reservation and context has last_venues, try to fill in venue_email if missing
+            if tool_name == "make_venue_reservation" and context and "last_venues" in context:
+                if "venue_email" not in tool_args or not tool_args["venue_email"]:
+                    venue_name = tool_args.get("venue_name")
+                    if venue_name:
+                        for venue in context["last_venues"]:
+                            if venue["name"].lower() == venue_name.lower():
+                                tool_args["venue_email"] = venue.get("email")
+                                # Optionally fill in other details
+                                break
             if tool:
                 result = await tool.run(tool_args)
+                # Store venues in context after find_venues
+                if tool_name == "find_venues" and isinstance(result, dict) and result.get("venues"):
+                    if context is None:
+                        context = {}
+                    context["last_venues"] = result["venues"]
                 # Check for missing wedding details error from send_invite
                 if tool_name == "send_invite" and isinstance(result, dict) and not result.get("success") and "wedding details" in result.get("message", ""):
-                    # Store the original intent in context
                     if context is None:
                         context = {}
                     context["pending_tool_call"] = {"tool_name": tool_name, "tool_args": tool_args}
-                    # Prompt user for missing details
                     return {"reply": result["message"], "context": context}
-                # If we just updated wedding details and have a pending tool call, retry it
                 if tool_name == "update_wedding_details" and context and context.get("pending_tool_call"):
                     pending = context.pop("pending_tool_call")
                     pending_tool = self.tool_registry.get_tool_by_name(pending["tool_name"])
                     if pending_tool:
                         retry_result = await pending_tool.run(pending["tool_args"])
-                        # Summarize retry result
                         if not isinstance(retry_result, str):
                             summary_prompt = f"You are Wendy, an AI wedding planner. Here is the result of a tool call: {json.dumps(retry_result)}. Please summarize or present this information in a friendly, natural language reply for the user."
                             summary_response = await self.openai_client.chat.completions.create(
@@ -121,7 +150,6 @@ class AgentOrchestrator:
                             return {"reply": summary_text, "context": context}
                         else:
                             return {"reply": retry_result, "context": context}
-                # Normal tool call result
                 if not isinstance(result, str):
                     summary_prompt = f"You are Wendy, an AI wedding planner. Here is the result of a tool call: {json.dumps(result)}. Please summarize or present this information in a friendly, natural language reply for the user."
                     summary_response = await self.openai_client.chat.completions.create(

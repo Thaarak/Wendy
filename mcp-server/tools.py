@@ -4,6 +4,15 @@ from typing import Any, Dict, List
 import openai
 import json
 from datetime import datetime
+import os
+import httpx
+import re
+import os
+import httpx
+import anthropic
+import re
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Tool: Send Invite ---
 class SendInviteTool:
@@ -270,6 +279,244 @@ class UpdateWeddingDetailsTool:
             print(f"❌ Failed to update wedding details: {e}")
             return {"success": False, "message": f"Failed to update wedding details: {e}"}
 
+
+class FindVenuesTool:
+    name = "find_venues"
+    description = """
+    Search for wedding venues in a specified location using Anthropic Claude with web search and scraping.
+    Input: { "location": "City, State or region" }
+    Output: { "success": true, "venues": [ { "name": ..., "address": ..., "email": ..., "phone": ..., "capacity": ..., "website": ... } ], "message": "Summary or error" }
+    When to use: When the user asks to search for or suggest wedding venues in a location.
+    Example: "Find venues in San Francisco", "Show me wedding venues near Austin, TX"
+    """
+
+    def __init__(self, db, openai_api_key=None):
+        self.db = db
+        self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+    async def run(self, input: dict) -> dict:
+        try:
+            location = input.get("location")
+            if not location:
+                return {"success": False, "message": "No location provided.", "venues": []}
+            if not self.anthropic_api_key:
+                return {"success": False, "message": "ANTHROPIC_API_KEY not set in environment.", "venues": []}
+
+            http_client = httpx.Client(
+                headers={
+                    "anthropic-beta": "web-search-2025-03-05",
+                    "anthropic-version": "2023-06-01"
+                }
+            )
+            client = anthropic.Anthropic(
+                api_key=self.anthropic_api_key,
+                http_client=http_client,
+                default_headers={
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "web-search-2025-03-05"
+                }
+            )
+
+            prompt = f"""
+The user is looking for wedding venues in: {location}
+
+Please perform the following tasks:
+1. Use the web search tool to find wedding venues in {location}.
+2. Select 3 top results from the search. Only include venues that have a real, valid, working email contact for reservations or inquiries. The email must be present on the venue's official website. Do not include venues that only have a web form or no email address.
+3. For each selected venue:
+   a. Visit the venue's official website.
+   b. Scrape the following essential information:
+       - Venue name
+       - Address
+       - Email contact (must be a real, working email address for the venue; skip venues without one)
+       - Phone number (if available)
+       - Capacity (if available)
+       - Website URL (must be the official venue website)
+
+Important rules:
+- Only include venues with a real, working email address for reservations or inquiries. Do not include venues with missing, generic, or web form-only contacts.
+- The email must be scraped from the venue's official website and should be a direct contact for the venue (not a third-party or aggregator).
+- If you cannot find a valid email for a venue, skip that venue and select another.
+- If you cannot find at least one suitable venue with a valid email in the specified location, respond with:
+
+<error>Unable to find wedding venues in {location} with a valid email contact. Please try a different location or expand your search area.</error>
+
+Present the gathered information in the following format only and nothing else. Do not show your reasoning, planning, or any intermediate steps:
+
+<venues>
+<venue>
+<name>[Venue Name]</name>
+<address>[Full Address]</address>
+<email>[Email Address]</email>
+<phone>[Phone Number]</phone>
+<capacity>[Capacity Information]</capacity>
+<website>[Website URL]</website>
+</venue>
+[Repeat for each venue]
+</venues>
+"""
+
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                temperature=1,
+                system="You are an AI agent designed to help with wedding planning. You have access to a tool which performs web searches to find and gather information about wedding venues in a specified location. Respond only with the final answer relevant to the user query. Do not show your reasoning, planning, or any intermediate steps. Format the response clearly with Markdown headings and bullet points as appropriate.",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                tools=[
+                    {
+                        "name": "web_search",
+                        "type": "web_search_20250305",
+                        "max_uses": 5
+                    }
+                ]
+            )
+
+            result = str(message.content)
+            venues = []
+            venues_match = re.search(r"<venues>([\s\S]*?)</venues>", result)
+            if venues_match:
+                venues_block = venues_match.group(1)
+                venue_regex = re.compile(r"<venue>([\s\S]*?)</venue>")
+                for match in venue_regex.finditer(venues_block):
+                    venue_xml = match.group(1)
+                    def extract(tag):
+                        m = re.search(rf"<{tag}>([\s\S]*?)</{tag}>", venue_xml)
+                        return m.group(1).strip() if m else ""
+                    venues.append({
+                        "name": extract("name"),
+                        "address": extract("address"),
+                        "email": extract("email"),
+                        "phone": extract("phone"),
+                        "capacity": extract("capacity"),
+                        "website": extract("website"),
+                    })
+            elif "<error>" in result:
+                return {"success": False, "venues": [], "message": result}
+            else:
+                return {"success": False, "venues": [], "message": "No venues found in response."}
+
+            return {
+                "success": True,
+                "venues": venues,
+                "message": f"Found {len(venues)} venues in {location}."
+            }
+        except Exception as e:
+            print(f"❌ Error in FindVenuesTool: {e}")
+            return {"success": False, "venues": [], "message": f"❌ Error finding venues: {str(e)}"}
+
+# --- Tool: Make Venue Reservation ---
+class MakeVenueReservationTool:
+    name = "make_venue_reservation"
+    description = """
+    Make a reservation request at a wedding venue.
+    Input: {
+        "user_name": "Name of the person making the reservation",
+        "user_email": "Their email",
+        "venue_name": "Venue to book",
+        "venue_email": "Venue contact email",
+        "budget": "Budget for the venue",
+        "guest_count": Number of guests,
+        "event_date": "YYYY-MM-DD",
+        "special_notes": "Any additional requests" (optional),
+        "context": { ... } (optional, for orchestrator context)
+    }
+    Output: { "success": true, "message": "Reservation sent!", "reservation_id": ... }
+    When to use: When the user asks to book, reserve, or make a reservation at a wedding venue.
+    Example: "Book Grand Ballroom for 120 guests on 2024-10-15"
+    """
+
+    def __init__(self, db, smtp_user, smtp_pass):
+        self.db = db
+        self.smtp_host = "smtp.gmail.com"
+        self.smtp_port = 465
+        self.smtp_user = smtp_user
+        self.smtp_pass = smtp_pass
+
+    async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            required = ["user_name", "user_email", "venue_name", "budget", "guest_count", "event_date"]
+            for field in required:
+                if not input.get(field):
+                    return {"success": False, "message": f"Missing required field: {field}"}
+            venue_email = input.get("venue_email")
+            # If not provided, try to get from context
+            context = input.get("context")
+            if not venue_email and context and "last_venues" in context:
+                venue_name = input.get("venue_name")
+                for venue in context["last_venues"]:
+                    if venue["name"].lower() == venue_name.lower():
+                        venue_email = venue.get("email")
+                        break
+            if not venue_email:
+                return {"success": False, "message": "Venue email not found. Please specify the venue email."}
+
+            # --- Use OpenAI to generate a professional reservation email ---
+            openai_api_key = os.environ.get("OPENAI_API_KEY")
+            if not openai_api_key:
+                return {"success": False, "message": "OPENAI_API_KEY not set in environment."}
+            openai_client = openai.AsyncOpenAI(api_key=openai_api_key)
+            prompt = f"""
+You are a professional wedding planner assistant. Write a formal, polite, and information-rich email to a wedding venue to request a reservation. Include all the following details:
+- Venue name: {input['venue_name']}
+- User name: {input['user_name']}
+- User email: {input['user_email']}
+- Event date: {input['event_date']}
+- Guest count: {input['guest_count']}
+- Budget: {input['budget']}
+- Special notes: {input.get('special_notes', 'None')}
+
+The email should:
+- Be addressed to the venue (use the venue name in the greeting if possible)
+- Clearly state the user's interest in booking the venue for a wedding
+- List all the details above in a natural, professional way
+- Ask about availability and next steps
+- Be concise, warm, and professional
+- End with the user's name and email as signature
+
+Respond with only the email body, no subject line or extra commentary.
+"""
+            response = await openai_client.chat.completions.create(
+                model="gpt-3.5-turbo-1106",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            email_body = response.choices[0].message.content.strip()
+
+            msg = MIMEText(email_body, 'plain')
+            msg['Subject'] = f"Wedding Venue Reservation Inquiry: {input['event_date']}"
+            msg['From'] = self.smtp_user
+            msg['To'] = venue_email
+
+            # Send email (blocking, so run in thread)
+            import asyncio
+            loop = asyncio.get_event_loop()
+            def send_email():
+                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
+                    server.login(self.smtp_user, self.smtp_pass)
+                    server.send_message(msg)
+            await loop.run_in_executor(None, send_email)
+
+            # Optionally, log reservation in DB (stubbed)
+            # reservation_id = await self.db.add_reservation(...)
+
+            return {
+                "success": True,
+                "message": f"Reservation request sent to {venue_email}",
+                # "reservation_id": reservation_id
+            }
+        except Exception as e:
+            print(f"❌ Failed to make venue reservation: {e}")
+            return {"success": False, "message": f"Failed to make reservation: {e}"}
+
 # --- Tool Registry ---
 class ToolRegistry:
     def __init__(self, db, email_service, smtp_user, smtp_pass, openai_api_key):
@@ -280,6 +527,8 @@ class ToolRegistry:
             FollowUpTool(db, email_service),
             ProcessEmailResponseTool(db, openai_api_key),
             UpdateWeddingDetailsTool(db),  # Register the new tool
+            FindVenuesTool(db, openai_api_key),  # <-- Add this
+            MakeVenueReservationTool(db, smtp_user, smtp_pass),  # <-- Add this
         ]
     def get_tools(self) -> List[Any]:
         return self.tools
