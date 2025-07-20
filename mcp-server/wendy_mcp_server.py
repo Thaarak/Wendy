@@ -453,7 +453,9 @@ async def find_venues(request: FindVenuesRequest):
 @app.post("/tools/make_venue_reservation", response_model=VenueReservationResponse)
 async def make_venue_reservation(request: VenueReservationRequest):
     """
-    Make a reservation at a wedding venue by generating an AI-powered email and logging the attempt.
+    Book, reserve, or make a reservation at a wedding venue by generating an AI-powered email and logging the attempt.
+    Use this endpoint whenever the user asks to book, reserve, or make a reservation at a venue. Example user requests: "Book Grand Ballroom for 120 guests on 2024-10-15", "Reserve a venue for my wedding", "Make a reservation at The Plaza Hotel".
+    Required fields: user_name, user_email, venue_name, venue_email, budget, guest_count, date, special_notes (optional).
     """
     if not db or not email_service:
         raise HTTPException(status_code=500, detail="Server not initialized")

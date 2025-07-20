@@ -121,6 +121,35 @@ export class WendyMCPClient {
       throw error;
     }
   }
+
+  async makeVenueReservation(params: {
+    user_name: string;
+    user_email: string;
+    venue_name: string;
+    venue_email: string;
+    budget: string;
+    guest_count: number;
+    date: string;
+    special_notes?: string;
+  }): Promise<{ result: string; reservation_id?: number; error?: string }> {
+    try {
+      const response = await fetch(`${this.baseUrl}/tools/make_venue_reservation`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      const result = await response.json();
+      return result;
+    } catch (error) {
+      console.error('Error making venue reservation:', error);
+      throw error;
+    }
+  }
 }
 
 // Singleton instance

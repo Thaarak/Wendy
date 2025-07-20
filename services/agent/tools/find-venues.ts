@@ -4,34 +4,54 @@ export interface FindVenuesParams {
   location: string;
 }
 
+export interface VenueInfo {
+  name?: string;
+  address?: string;
+  email?: string;
+  phone?: string;
+  capacity?: string;
+}
+
 export interface FindVenuesResult {
   success: boolean;
   message: string;
-  venues?: any[];
+  venues?: VenueInfo[];
 }
 
 export async function findVenues(params: FindVenuesParams): Promise<FindVenuesResult> {
   try {
     const mcpClient = getMCPClient();
     const result = await mcpClient.findVenues(params.location);
-    
-    // Check if the result indicates success (contains venue information)
-    if (result.includes('<venues>') || result.includes('venue') || !result.includes('❌')) {
-      return {
-        success: true,
-        message: result,
-      };
-    } else {
-      return {
-        success: false,
-        message: result,
-      };
+
+    // Parse <venues> XML block
+    const venues: VenueInfo[] = [];
+    const venuesMatch = result.match(/<venues>([\s\S]*?)<\/venues>/);
+    if (venuesMatch) {
+      const venuesBlock = venuesMatch[1];
+      const venueRegex = /<venue>([\s\S]*?)<\/venue>/g;
+      let match;
+      while ((match = venueRegex.exec(venuesBlock)) !== null) {
+        const venueXml = match[1];
+        const name = (venueXml.match(/<name>([\s\S]*?)<\/name>/) || [])[1]?.trim();
+        const address = (venueXml.match(/<address>([\s\S]*?)<\/address>/) || [])[1]?.trim();
+        const email = (venueXml.match(/<email>([\s\S]*?)<\/email>/) || [])[1]?.trim();
+        const phone = (venueXml.match(/<phone>([\s\S]*?)<\/phone>/) || [])[1]?.trim();
+        const capacity = (venueXml.match(/<capacity>([\s\S]*?)<\/capacity>/) || [])[1]?.trim();
+        venues.push({ name, address, email, phone, capacity });
+      }
     }
+
+    return {
+      success: true,
+      message: result,
+      venues,
+    };
   } catch (error) {
     console.error('Error in find_venues tool:', error);
     return {
       success: false,
       message: `❌ Failed to find venues in ${params.location}: ${error}`,
+      venues: [],
     };
   }
 }
