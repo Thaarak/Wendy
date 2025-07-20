@@ -3,6 +3,7 @@ import openai
 import json
 from tools import ToolRegistry
 from typing import Any, Dict, Optional
+import re
 
 class AgentOrchestrator:
     """
@@ -19,6 +20,10 @@ class AgentOrchestrator:
         Receives a message and context, sends to OpenAI with tool schema, executes selected tool(s), returns result.
         Implements automatic retry: if a tool call fails due to missing wedding details, stores the original tool call in context. After a successful update_wedding_details call, retries the original tool call.
         """
+        # Pre-parse the user message for one or more email addresses
+        def extract_emails(text):
+            return re.findall(r'([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)', text)
+        pre_parsed_emails = extract_emails(message)
         tools = self.tool_registry.get_tools()
         functions = []
         for tool in tools:
@@ -43,7 +48,21 @@ class AgentOrchestrator:
                     "description": tool.description,
                     "parameters": {"type": "object", "properties": {}},
                 })
+        # Add explicit system prompt and examples for function calling reliability
+        system_prompt = (
+            "You are Wendy, an AI wedding planner. "
+            "When a user says something like 'invite arya.gan@gmailc.ocm', you should call the send_invite tool with the email set to 'arya.gan@gmailc.ocm'.\n"
+            "Examples:\n"
+            "User: invite arya.gan@gmailc.ocm\n"
+            "-> Call send_invite with email='arya.gan@gmailc.ocm'\n"
+            "User: invite John (john@example.com)\n"
+            "-> Call send_invite with email='john@example.com', name='John'\n"
+            "User: send an invite to alice@foo.com\n"
+            "-> Call send_invite with email='alice@foo.com'\n"
+            "Always extract the email address and name if present, and call send_invite with those arguments."
+        )
         messages = [
+            {"role": "system", "content": system_prompt},
             {"role": "system", "content": "You are Wendy, an AI wedding planner. Use the available tools to help the user."},
             {"role": "user", "content": message},
         ]
@@ -77,6 +96,20 @@ class AgentOrchestrator:
             fn_call = choice.message.function_call
             tool_name = fn_call.name
             tool_args = json.loads(fn_call.arguments) if fn_call.arguments else {}
+            # If multiple emails are found, run send_invite for each
+            if tool_name == "send_invite" and pre_parsed_emails:
+                results = []
+                for email in pre_parsed_emails:
+                    args = dict(tool_args)  # copy base args
+                    args["email"] = email
+                    tool = self.tool_registry.get_tool_by_name(tool_name)
+                    if tool:
+                        result = await tool.run(args)
+                        results.append(result.get("message") or str(result))
+                return {"reply": "\n".join(results), "context": context}
+            # Otherwise, single invite as before
+            if tool_name == "send_invite" and pre_parsed_emails and not tool_args.get("email"):
+                tool_args["email"] = pre_parsed_emails[0]
             tool = self.tool_registry.get_tool_by_name(tool_name)
             # --- Venue context patch ---
             # If making a reservation and context has last_venues, try to fill in venue_email if missing

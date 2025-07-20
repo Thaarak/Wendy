@@ -103,11 +103,13 @@ class WeddingDetails(BaseModel):
     couple_names: str
     wedding_date: str
     location: str
+    time: str
 
 class WeddingDetailsResponse(BaseModel):
     couple_names: str
     wedding_date: str
     location: str
+    time: str
 
 # Database helper class
 class Database:
@@ -155,13 +157,14 @@ class Database:
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 couple_names TEXT,
                 wedding_date TEXT,
-                location TEXT
+                location TEXT,
+                time TEXT
             )
             """
         )
         # Ensure a row always exists
         await cursor.execute(
-            "INSERT OR IGNORE INTO wedding_details (id, couple_names, wedding_date, location) VALUES (1, '', '', '')"
+            "INSERT OR IGNORE INTO wedding_details (id, couple_names, wedding_date, location, time) VALUES (1, '', '', '', '')"
         )
 
         await self.conn.commit()
@@ -246,14 +249,14 @@ class Database:
             raise RuntimeError("Database not connected")
         cursor = await self.conn.execute("SELECT * FROM wedding_details WHERE id = 1")
         row = await cursor.fetchone()
-        return dict(row) if row else {"couple_names": "", "wedding_date": "", "location": ""}
+        return dict(row) if row else {"couple_names": "", "wedding_date": "", "location": "", "time": ""}
 
-    async def set_wedding_details(self, couple_names: str, wedding_date: str, location: str):
+    async def set_wedding_details(self, couple_names: str, wedding_date: str, location: str, time: str):
         if not self.conn:
             raise RuntimeError("Database not connected")
         await self.conn.execute(
-            "UPDATE wedding_details SET couple_names = ?, wedding_date = ?, location = ? WHERE id = 1",
-            (couple_names, wedding_date, location)
+            "UPDATE wedding_details SET couple_names = ?, wedding_date = ?, location = ?, time = ? WHERE id = 1",
+            (couple_names, wedding_date, location, time)
         )
         await self.conn.commit()
 
@@ -442,7 +445,7 @@ async def startup_event():
     email_monitor = EmailMonitor(db, email_service)
     print("✅ Email monitor initialized")
     # Start monitoring automatically, every 30 seconds for demo
-    email_monitor.start_monitoring(interval_minutes=0.25)
+    email_monitor.start_monitoring(interval_minutes=0.1)
     print("🔄 Automatic email monitoring started for wendy.weddingplanning@gmail.com")
 
     agent_orchestrator = AgentOrchestrator(
@@ -555,7 +558,7 @@ async def set_wedding_details(details: WeddingDetails):
     global db
     if not db:
         raise HTTPException(status_code=500, detail="Server not initialized")
-    await db.set_wedding_details(details.couple_names, details.wedding_date, details.location)
+    await db.set_wedding_details(details.couple_names, details.wedding_date, details.location, details.time)
     return details
 
 

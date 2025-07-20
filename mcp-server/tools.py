@@ -36,7 +36,7 @@ class SendInviteTool:
             return {"success": False, "message": "No email address provided for invitation."}
         try:
             # Always fetch the latest wedding details from DB right before sending
-            details = await self.db.get_wedding_details() if self.db else {"couple_names": "", "wedding_date": "", "location": ""}
+            details = await self.db.get_wedding_details() if self.db else {"couple_names": "", "wedding_date": "", "location": "", "time": ""}
             missing = []
             if not details.get('couple_names'):
                 missing.append('couple names')
@@ -44,28 +44,80 @@ class SendInviteTool:
                 missing.append('wedding date')
             if not details.get('location'):
                 missing.append('location')
+            if not details.get('time'):
+                missing.append('time')
             if missing:
                 return {"success": False, "message": f"Please provide the following wedding details before sending invites: {', '.join(missing)}."}
-            msg = MIMEText(f"""
-                Dear {input.get('name', 'Guest')},
-                You are cordially invited to our wedding!
-                Date: {details['wedding_date']}
-                Location: {details['location']}
-                We would be honored by your presence on our special day.
-                Please RSVP at your earliest convenience.
-                Best regards,
-                Wendy ({details['couple_names']})
-            """, 'plain')
+            print(f"[SendInviteTool] Preparing to send invite to: {input['email']} (Name: {input.get('name', 'Guest')})")
+            print(f"[SendInviteTool] Using SMTP user: {self.smtp_user}")
+            print(f"[SendInviteTool] Wedding details: {details}")
+            # Build a visually improved, colorful HTML email
+            html_body = f"""
+            <!DOCTYPE html>
+            <html>
+              <head>
+                <link href='https://fonts.googleapis.com/css?family=Dancing+Script:700|Georgia:400,700&display=swap' rel='stylesheet'>
+              </head>
+              <body style=\"background: linear-gradient(135deg, #fdf6f0 0%, #ffe5ec 100%); padding: 40px 0;\">
+                <table align=\"center\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width: 520px; background: #fff; border-radius: 18px; box-shadow: 0 4px 24px rgba(181,131,141,0.10); font-family: 'Georgia', serif;\">
+                  <tr>
+                    <!-- Floral banner removed -->
+                  </tr>
+                  <tr>
+                    <td style=\"padding: 0 32px 32px 32px; text-align: center;\">
+                      <h2 style=\"color: #22223b; font-size: 2em; margin: 16px 0 0 0; font-weight: 700;\">You're Invited!</h2>
+                      <div style=\"color: #6d6875; font-size: 1.2em; margin-bottom: 0.5em;\">to the wedding of</div>
+                      <div style=\"font-family: 'Dancing Script', cursive; color: #b5838d; font-size: 2.5em; font-weight: 700; margin-bottom: 18px;\">{details['couple_names']}</div>
+                      <p style=\"color: #22223b; font-size: 1.1em; margin-bottom: 0.5em;\">Dear {input.get('name', 'Guest')},</p>
+                      <p style=\"color: #7c2d6a; font-size: 1.15em; margin-bottom: 1.5em; font-weight: 500;\">We would be honored by your presence on our special day.</p>
+                      <table align=\"center\" style=\"margin: 0 auto 24px auto;\">
+                        <tr>
+                          <td style=\"padding: 8px 0; font-size: 1.1em;\">
+                            <span style=\"font-size: 1.2em;\">📅</span> <strong>Date:</strong> {details['wedding_date']}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style=\"padding: 8px 0; font-size: 1.1em;\">
+                            <span style=\"font-size: 1.2em;\">⏰</span> <strong>Time:</strong> {details['time']}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td style=\"padding: 8px 0; font-size: 1.1em;\">
+                            <span style=\"font-size: 1.2em;\">📍</span> <strong>Location:</strong> {details['location']}
+                          </td>
+                        </tr>
+                      </table>
+                      <a href=\"mailto:wendy.weddingplanning@gmail.com?subject=RSVP\" style=\"display: inline-block; background: linear-gradient(90deg, #b5838d 0%, #ffb4a2 100%); color: #fff; padding: 14px 38px; border-radius: 8px; text-decoration: none; font-size: 1.1em; font-weight: 600; margin-top: 18px; box-shadow: 0 2px 8px rgba(181,131,141,0.10);\">Reply to RSVP</a>
+                      <hr style=\"border: none; border-top: 2px solid #ffb4a2; width: 60%; margin: 32px auto 16px auto;\">
+                      <div style=\"color: #6d6875; font-size: 1em; margin-top: 12px;\">
+                        <span style=\"font-style: italic;\">Best regards,</span><br>
+                        Wendy ({details['couple_names']})
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </body>
+            </html>
+            """
+            msg = MIMEText(html_body, 'html')
             msg['Subject'] = 'You are invited to our wedding!'
             msg['From'] = self.smtp_user
             msg['To'] = input['email']
-            # SMTP is blocking, so run in thread
             import asyncio
             loop = asyncio.get_event_loop()
             def send_email():
-                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
-                    server.login(self.smtp_user, self.smtp_pass)
-                    server.send_message(msg)
+                import smtplib
+                try:
+                    print(f"[SendInviteTool] Connecting to SMTP server: {self.smtp_host}:{self.smtp_port}")
+                    with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
+                        print("[SendInviteTool] Logging in to SMTP server...")
+                        server.login(self.smtp_user, self.smtp_pass)
+                        print("[SendInviteTool] Sending email...")
+                        server.send_message(msg)
+                        print(f"[SendInviteTool] Email sent successfully to {input['email']}")
+                except Exception as smtp_e:
+                    print(f"[SendInviteTool][ERROR] Failed to send email to {input['email']}: {smtp_e}")
+                    raise
             await loop.run_in_executor(None, send_email)
             # Add guest to DB after sending invite
             if self.db:
@@ -203,11 +255,11 @@ class ProcessEmailResponseTool:
 class UpdateWeddingDetailsTool:
     name = "update_wedding_details"
     description = """
-    Update any or all wedding details (couple names, wedding date, location).
-    Input: { "couple_names"?: string, "wedding_date"?: string, "location"?: string }
+    Update any or all wedding details (couple names, wedding date, location, time).
+    Input: { "couple_names"?: string, "wedding_date"?: string, "location"?: string, "time"?: string }
     Output: { "success": true, "message": "Wedding details updated!" }
-    When to use: Whenever the user provides or wants to update any wedding detail, even if only one field is provided. You can use this tool to update just the date, just the location, just the couple names, or any combination.
-    Example: "Change the wedding date to July 27", "Set the location to The Park", "Update the couple names to Alex and Jamie"
+    When to use: Whenever the user provides or wants to update any wedding detail, even if only one field is provided. You can use this tool to update just the date, just the location, just the couple names, just the time, or any combination.
+    Example: "Change the wedding date to July 27", "Set the location to The Park", "Update the couple names to Alex and Jamie", "Set the time to 5pm"
     """
     def __init__(self, db):
         self.db = db
@@ -218,9 +270,10 @@ class UpdateWeddingDetailsTool:
             couple_names = input.get('couple_names', current.get('couple_names', ''))
             wedding_date = input.get('wedding_date', current.get('wedding_date', ''))
             location = input.get('location', current.get('location', ''))
-            if not (couple_names or wedding_date or location):
-                return {"success": False, "message": "Please provide at least one wedding detail to update (couple_names, wedding_date, or location)."}
-            await self.db.set_wedding_details(couple_names, wedding_date, location)
+            time = input.get('time', current.get('time', ''))
+            if not (couple_names or wedding_date or location or time):
+                return {"success": False, "message": "Please provide at least one wedding detail to update (couple_names, wedding_date, location, or time)."}
+            await self.db.set_wedding_details(couple_names, wedding_date, location, time)
             return {"success": True, "message": "Wedding details updated!"}
         except Exception as e:
             print(f"❌ Failed to update wedding details: {e}")
