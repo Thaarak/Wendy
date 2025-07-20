@@ -423,7 +423,7 @@ async def startup_event():
     email_monitor = EmailMonitor(db, email_service)
     print("✅ Email monitor initialized")
     # Start monitoring automatically, every 30 seconds for demo
-    email_monitor.start_monitoring(interval_minutes=0.25)
+    email_monitor.start_monitoring(interval_minutes=0.1)
     print("🔄 Automatic email monitoring started for wendy.weddingplanning@gmail.com")
 
     agent_orchestrator = AgentOrchestrator(

@@ -39,6 +39,9 @@ class SendInviteTool:
                 missing.append('time')
             if missing:
                 return {"success": False, "message": f"Please provide the following wedding details before sending invites: {', '.join(missing)}."}
+            print(f"[SendInviteTool] Preparing to send invite to: {input['email']} (Name: {input.get('name', 'Guest')})")
+            print(f"[SendInviteTool] Using SMTP user: {self.smtp_user}")
+            print(f"[SendInviteTool] Wedding details: {details}")
             # Build a visually improved, colorful HTML email
             html_body = f"""
             <!DOCTYPE html>
@@ -91,13 +94,21 @@ class SendInviteTool:
             msg['Subject'] = 'You are invited to our wedding!'
             msg['From'] = self.smtp_user
             msg['To'] = input['email']
-            # SMTP is blocking, so run in thread
             import asyncio
             loop = asyncio.get_event_loop()
             def send_email():
-                with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
-                    server.login(self.smtp_user, self.smtp_pass)
-                    server.send_message(msg)
+                import smtplib
+                try:
+                    print(f"[SendInviteTool] Connecting to SMTP server: {self.smtp_host}:{self.smtp_port}")
+                    with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
+                        print("[SendInviteTool] Logging in to SMTP server...")
+                        server.login(self.smtp_user, self.smtp_pass)
+                        print("[SendInviteTool] Sending email...")
+                        server.send_message(msg)
+                        print(f"[SendInviteTool] Email sent successfully to {input['email']}")
+                except Exception as smtp_e:
+                    print(f"[SendInviteTool][ERROR] Failed to send email to {input['email']}: {smtp_e}")
+                    raise
             await loop.run_in_executor(None, send_email)
             # Add guest to DB after sending invite
             if self.db:
