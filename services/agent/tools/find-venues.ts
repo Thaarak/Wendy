@@ -10,6 +10,7 @@ export interface VenueInfo {
   email?: string;
   phone?: string;
   capacity?: string;
+  website?: string;
 }
 
 export interface FindVenuesResult {
@@ -37,7 +38,8 @@ export async function findVenues(params: FindVenuesParams): Promise<FindVenuesRe
         const email = (venueXml.match(/<email>([\s\S]*?)<\/email>/) || [])[1]?.trim();
         const phone = (venueXml.match(/<phone>([\s\S]*?)<\/phone>/) || [])[1]?.trim();
         const capacity = (venueXml.match(/<capacity>([\s\S]*?)<\/capacity>/) || [])[1]?.trim();
-        venues.push({ name, address, email, phone, capacity });
+        const website = (venueXml.match(/<website>([\s\S]*?)<\/website>/) || [])[1]?.trim();
+        venues.push({ name, address, email, phone, capacity, website });
       }
     }
 

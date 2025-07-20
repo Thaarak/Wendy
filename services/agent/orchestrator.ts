@@ -301,6 +301,7 @@ export class AgentOrchestrator {
           (venue.email ? `   Email: ${venue.email}\n` : '') +
           (venue.phone ? `   Phone: ${venue.phone}\n` : '') +
           (venue.capacity ? `   Capacity: ${venue.capacity}\n` : '') +
+          (venue.website ? `   Website: ${venue.website}\n` : '') +
           `\n` // Extra blank line between venues
         );
       });

@@ -411,6 +411,7 @@ async def find_venues(request: FindVenuesRequest):
                                     - Email contact
                                     - Phone number (if available)
                                     - Capacity (if available)
+                                    - Website URL (if available)
 
                                 Present the gathered information in the following format only and nothing else. Do not show your reasoning, planning, or any intermediate steps:
                                 
@@ -420,7 +421,8 @@ async def find_venues(request: FindVenuesRequest):
                                 <address>[Full Address]</address>
                                 <email>[Email Address]</email>
                                 <phone>[Phone Number]</phone>
-                                <capacity>[Capacity Information]</capacity>    
+                                <capacity>[Capacity Information]</capacity>
+                                <website>[Website URL]</website>
                                 </venue>
                                 [Repeat for each venue]
                                 </venues>
