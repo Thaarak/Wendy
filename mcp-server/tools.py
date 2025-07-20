@@ -4,6 +4,15 @@ from typing import Any, Dict, List
 import openai
 import json
 from datetime import datetime
+import os
+import httpx
+import re
+import os
+import httpx
+import anthropic
+import re
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Tool: Send Invite ---
 class SendInviteTool:
@@ -217,11 +226,11 @@ class UpdateWeddingDetailsTool:
             print(f"❌ Failed to update wedding details: {e}")
             return {"success": False, "message": f"Failed to update wedding details: {e}"}
 
-# --- Tool: Find Venues ---
+
 class FindVenuesTool:
     name = "find_venues"
     description = """
-    Search for wedding venues in a specified location.
+    Search for wedding venues in a specified location using Anthropic Claude with web search and scraping.
     Input: { "location": "City, State or region" }
     Output: { "success": true, "venues": [ { "name": ..., "address": ..., "email": ..., "phone": ..., "capacity": ..., "website": ... } ], "message": "Summary or error" }
     When to use: When the user asks to search for or suggest wedding venues in a location.
@@ -230,42 +239,127 @@ class FindVenuesTool:
 
     def __init__(self, db, openai_api_key=None):
         self.db = db
-        self.openai_api_key = openai_api_key
+        self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
 
-    async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+    async def run(self, input: dict) -> dict:
         try:
             location = input.get("location")
             if not location:
                 return {"success": False, "message": "No location provided.", "venues": []}
+            if not self.anthropic_api_key:
+                return {"success": False, "message": "ANTHROPIC_API_KEY not set in environment.", "venues": []}
 
-            # Use OpenAI or a web search API to find venues (stubbed for now)
-            # In production, replace this with a real search or API call
-            venues = [
-                {
-                    "name": "Grand Ballroom Hotel",
-                    "address": f"123 Main St, {location}",
-                    "email": "events@grandballroom.com",
-                    "phone": "+1 (555) 123-4567",
-                    "capacity": "200",
-                    "website": "https://grandballroom.com"
-                },
-                {
-                    "name": "The Plaza Gardens",
-                    "address": f"456 Garden Ave, {location}",
-                    "email": "info@plazagardens.com",
-                    "phone": "+1 (555) 234-5678",
-                    "capacity": "150",
-                    "website": "https://plazagardens.com"
+            http_client = httpx.Client(
+                headers={
+                    "anthropic-beta": "web-search-2025-03-05",
+                    "anthropic-version": "2023-06-01"
                 }
-            ]
+            )
+            client = anthropic.Anthropic(
+                api_key=self.anthropic_api_key,
+                http_client=http_client,
+                default_headers={
+                    "anthropic-version": "2023-06-01",
+                    "anthropic-beta": "web-search-2025-03-05"
+                }
+            )
+
+            prompt = f"""
+The user is looking for wedding venues in: {location}
+
+Please perform the following tasks:
+1. Use the web search tool to find wedding venues in {location}.
+2. Select 3 top results from the search. Only include venues that have a real, valid, working email contact for reservations or inquiries. The email must be present on the venue's official website. Do not include venues that only have a web form or no email address.
+3. For each selected venue:
+   a. Visit the venue's official website.
+   b. Scrape the following essential information:
+       - Venue name
+       - Address
+       - Email contact (must be a real, working email address for the venue; skip venues without one)
+       - Phone number (if available)
+       - Capacity (if available)
+       - Website URL (must be the official venue website)
+
+Important rules:
+- Only include venues with a real, working email address for reservations or inquiries. Do not include venues with missing, generic, or web form-only contacts.
+- The email must be scraped from the venue's official website and should be a direct contact for the venue (not a third-party or aggregator).
+- If you cannot find a valid email for a venue, skip that venue and select another.
+- If you cannot find at least one suitable venue with a valid email in the specified location, respond with:
+
+<error>Unable to find wedding venues in {location} with a valid email contact. Please try a different location or expand your search area.</error>
+
+Present the gathered information in the following format only and nothing else. Do not show your reasoning, planning, or any intermediate steps:
+
+<venues>
+<venue>
+<name>[Venue Name]</name>
+<address>[Full Address]</address>
+<email>[Email Address]</email>
+<phone>[Phone Number]</phone>
+<capacity>[Capacity Information]</capacity>
+<website>[Website URL]</website>
+</venue>
+[Repeat for each venue]
+</venues>
+"""
+
+            message = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                temperature=1,
+                system="You are an AI agent designed to help with wedding planning. You have access to a tool which performs web searches to find and gather information about wedding venues in a specified location. Respond only with the final answer relevant to the user query. Do not show your reasoning, planning, or any intermediate steps. Format the response clearly with Markdown headings and bullet points as appropriate.",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ],
+                tools=[
+                    {
+                        "name": "web_search",
+                        "type": "web_search_20250305",
+                        "max_uses": 5
+                    }
+                ]
+            )
+
+            result = str(message.content)
+            venues = []
+            venues_match = re.search(r"<venues>([\s\S]*?)</venues>", result)
+            if venues_match:
+                venues_block = venues_match.group(1)
+                venue_regex = re.compile(r"<venue>([\s\S]*?)</venue>")
+                for match in venue_regex.finditer(venues_block):
+                    venue_xml = match.group(1)
+                    def extract(tag):
+                        m = re.search(rf"<{tag}>([\s\S]*?)</{tag}>", venue_xml)
+                        return m.group(1).strip() if m else ""
+                    venues.append({
+                        "name": extract("name"),
+                        "address": extract("address"),
+                        "email": extract("email"),
+                        "phone": extract("phone"),
+                        "capacity": extract("capacity"),
+                        "website": extract("website"),
+                    })
+            elif "<error>" in result:
+                return {"success": False, "venues": [], "message": result}
+            else:
+                return {"success": False, "venues": [], "message": "No venues found in response."}
+
             return {
                 "success": True,
                 "venues": venues,
                 "message": f"Found {len(venues)} venues in {location}."
             }
         except Exception as e:
-            print(f"❌ Failed to find venues: {e}")
-            return {"success": False, "venues": [], "message": f"Failed to find venues: {e}"}
+            print(f"❌ Error in FindVenuesTool: {e}")
+            return {"success": False, "venues": [], "message": f"❌ Error finding venues: {str(e)}"}
 
 # --- Tool: Make Venue Reservation ---
 class MakeVenueReservationTool:
@@ -313,24 +407,38 @@ class MakeVenueReservationTool:
             if not venue_email:
                 return {"success": False, "message": "Venue email not found. Please specify the venue email."}
 
-            # Compose reservation email
-            msg = MIMEText(f"""
-Dear {input['venue_name']},
-
-My name is {input['user_name']} and I am interested in reserving your venue for a wedding.
-
-Details:
-- Date: {input['event_date']}
+            # --- Use OpenAI to generate a professional reservation email ---
+            openai_api_key = os.environ.get("OPENAI_API_KEY")
+            if not openai_api_key:
+                return {"success": False, "message": "OPENAI_API_KEY not set in environment."}
+            openai_client = openai.AsyncOpenAI(api_key=openai_api_key)
+            prompt = f"""
+You are a professional wedding planner assistant. Write a formal, polite, and information-rich email to a wedding venue to request a reservation. Include all the following details:
+- Venue name: {input['venue_name']}
+- User name: {input['user_name']}
+- User email: {input['user_email']}
+- Event date: {input['event_date']}
 - Guest count: {input['guest_count']}
 - Budget: {input['budget']}
 - Special notes: {input.get('special_notes', 'None')}
 
-Please let me know about availability and next steps.
+The email should:
+- Be addressed to the venue (use the venue name in the greeting if possible)
+- Clearly state the user's interest in booking the venue for a wedding
+- List all the details above in a natural, professional way
+- Ask about availability and next steps
+- Be concise, warm, and professional
+- End with the user's name and email as signature
 
-Thank you,
-{input['user_name']}
-{input['user_email']}
-""", 'plain')
+Respond with only the email body, no subject line or extra commentary.
+"""
+            response = await openai_client.chat.completions.create(
+                model="gpt-3.5-turbo-1106",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            email_body = response.choices[0].message.content.strip()
+
+            msg = MIMEText(email_body, 'plain')
             msg['Subject'] = f"Wedding Venue Reservation Inquiry: {input['event_date']}"
             msg['From'] = self.smtp_user
             msg['To'] = venue_email

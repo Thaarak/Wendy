@@ -47,8 +47,25 @@ class AgentOrchestrator:
             {"role": "system", "content": "You are Wendy, an AI wedding planner. Use the available tools to help the user."},
             {"role": "user", "content": message},
         ]
+        # --- Context pruning to avoid context length errors ---
+        pruned_context = None
         if context:
-            messages.append({"role": "system", "content": f"Context: {json.dumps(context)}"})
+            pruned_context = dict(context)
+            # Only keep the most recent 3 venues and only essential fields
+            if "last_venues" in pruned_context and isinstance(pruned_context["last_venues"], list):
+                pruned_venues = []
+                for venue in pruned_context["last_venues"][:3]:
+                    pruned_venues.append({
+                        "name": venue.get("name"),
+                        "email": venue.get("email"),
+                        "address": venue.get("address")
+                    })
+                pruned_context["last_venues"] = pruned_venues
+            # Remove any other large or unnecessary fields
+            for key in list(pruned_context.keys()):
+                if key not in ["last_venues", "pending_tool_call", "user_email", "sender_email"]:
+                    del pruned_context[key]
+            messages.append({"role": "system", "content": f"Context: {json.dumps(pruned_context)}"})
         response = await self.openai_client.chat.completions.create(
             model="gpt-3.5-turbo-1106",
             messages=messages,
