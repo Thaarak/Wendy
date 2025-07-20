@@ -13,10 +13,15 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, List, Optional
+import json
 
 import aiosqlite
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import openai
+import asyncio
+import sqlite3
+from email_monitor import EmailMonitor
 
 app = FastAPI(
     title="Wendy Wedding Planning Server",
@@ -49,6 +54,31 @@ class UpdateRSVPRequest(BaseModel):
 
 
 class UpdateRSVPResponse(BaseModel):
+    result: str
+
+
+class ListGuestsRequest(BaseModel):
+    rsvp_filter: Optional[str] = None  # 'yes', 'no', 'maybe', or None for all
+
+
+class ListGuestsResponse(BaseModel):
+    result: str
+
+
+class FollowUpRequest(BaseModel):
+    pass  # No parameters needed
+
+
+class FollowUpResponse(BaseModel):
+    result: str
+
+
+class ProcessEmailRequest(BaseModel):
+    sender_email: str
+    email_content: str
+
+
+class ProcessEmailResponse(BaseModel):
     result: str
 
 
@@ -125,6 +155,32 @@ class Database:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    async def get_guests_by_rsvp(self, rsvp_status: str) -> list[dict]:
+        """Get guests filtered by RSVP status."""
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
+        cursor = await self.conn.execute(
+            "SELECT * FROM guests WHERE rsvp = ? ORDER BY created_at DESC",
+            (rsvp_status,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_maybe_guests(self) -> list[dict]:
+        """Get all guests with 'maybe' RSVP status."""
+        return await self.get_guests_by_rsvp('maybe')
+
+    async def get_guest_by_email(self, email: str) -> dict | None:
+        """Get a guest by email address."""
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+
+        cursor = await self.conn.cursor()
+        await cursor.execute("SELECT * FROM guests WHERE email = ?", (email,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
     async def update_guest_rsvp(self, email: str, rsvp: str) -> dict | None:
         """Update a guest's RSVP status."""
         if not self.conn:
@@ -188,16 +244,102 @@ class EmailService:
             print(f"❌ Failed to send invitation to {to_email}: {e}")
             return False
 
+    def send_follow_up(self, to_email: str, guest_name: str = None) -> bool:
+        """Send a follow-up email to guests with 'maybe' RSVP status."""
+        try:
+            # Create follow-up message
+            msg = MIMEText(
+                f"""
+                Dear {guest_name or 'Guest'},
+                
+                We hope this email finds you well! We wanted to follow up on your wedding invitation.
+                
+                We noticed you haven't confirmed your RSVP yet. We would love to know if you'll be able to join us on our special day!
+                
+                Please let us know your RSVP status at your earliest convenience.
+                
+                Thank you for your response!
+                
+                Best regards,
+                The Happy Couple
+                """,
+                'plain'
+            )
+            
+            msg['Subject'] = 'Follow-up: Wedding RSVP Reminder'
+            msg['From'] = self.smtp_user
+            msg['To'] = to_email
+            
+            # Send email
+            with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
+                server.login(self.smtp_user, self.smtp_pass)
+                server.send_message(msg)
+                
+            print(f"✅ Follow-up email sent to {to_email}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to send follow-up email to {to_email}: {e}")
+            return False
+
 
 # Global instances
 db: Database | None = None
 email_service: EmailService | None = None
+openai_client: openai.OpenAI | None = None
+email_monitor: EmailMonitor | None = None
+
+
+async def analyze_email_for_rsvp(email_content: str) -> dict:
+    """Analyze email content for RSVP information using OpenAI."""
+    global openai_client
+    
+    if not openai_client:
+        # Initialize OpenAI client if not already done
+        openai_client = openai.OpenAI(api_key="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")
+    
+    try:
+        prompt = f"""
+        Analyze this email response for RSVP information:
+
+        Email content: {email_content}
+
+        Determine if this contains an RSVP response. Look for:
+        - "Yes, I'll come", "I'll be there", "Count me in" → RSVP: yes
+        - "No, I can't make it", "I won't be able to attend" → RSVP: no  
+        - "Maybe", "I'll let you know", "I'm not sure" → RSVP: maybe
+        - No RSVP content → RSVP: null
+
+        Respond with JSON:
+        {{
+          "rsvp_status": "yes|no|maybe|null",
+          "confidence": 0.0-1.0,
+          "reasoning": "brief explanation"
+        }}
+        """
+        
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"}
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        return result
+        
+    except Exception as e:
+        print(f"Error analyzing email: {e}")
+        return {
+            "rsvp_status": None,
+            "confidence": 0.0,
+            "reasoning": f"Error analyzing email: {str(e)}"
+        }
 
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize database and email service on startup."""
-    global db, email_service
+    """Initialize database, email service, and start automatic email monitoring for Wendy's own inbox on startup."""
+    global db, email_service, email_monitor
     
     # Setup database
     db_path = Path(__file__).parent / "wedding.db"
@@ -205,9 +347,16 @@ async def startup_event():
     await db.connect()
     print(f"✅ Connected to SQLite database: {db_path}")
     
-    # Setup email service
+    # Setup email service (always wendy.weddingplanning@gmail.com)
     email_service = EmailService()
     print("✅ Email service initialized")
+
+    # Setup and start email monitor (always for Wendy's own inbox)
+    email_monitor = EmailMonitor(db, email_service)
+    print("✅ Email monitor initialized")
+    # Start monitoring automatically, every 5 minutes
+    email_monitor.start_monitoring(interval_minutes=5)
+    print("🔄 Automatic email monitoring started for wendy.weddingplanning@gmail.com")
 
 
 @app.on_event("shutdown")
@@ -262,6 +411,7 @@ async def send_invite(request: SendInviteRequest):
         )
 
 
+
 @app.post("/tools/update_rsvp", response_model=UpdateRSVPResponse)
 async def update_rsvp(request: UpdateRSVPRequest):
     """
@@ -285,6 +435,131 @@ async def update_rsvp(request: UpdateRSVPRequest):
     except Exception as e:
         return UpdateRSVPResponse(
             result=f"❌ Error updating RSVP for {request.email}: {str(e)}"
+        )
+
+
+@app.post("/tools/list_guests", response_model=ListGuestsResponse)
+async def list_guests(request: ListGuestsRequest):
+    """
+    List guests with optional RSVP filtering.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Server not initialized")
+    
+    try:
+        if request.rsvp_filter:
+            # Filter by RSVP status
+            guests = await db.get_guests_by_rsvp(request.rsvp_filter)
+            if guests:
+                guest_list = "\n".join([
+                    f"• {guest['name']} ({guest['email']}) - RSVP: {guest['rsvp']}"
+                    for guest in guests
+                ])
+                return ListGuestsResponse(
+                    result=f"Guests with RSVP '{request.rsvp_filter}':\n{guest_list}"
+                )
+            else:
+                return ListGuestsResponse(
+                    result=f"No guests found with RSVP status '{request.rsvp_filter}'"
+                )
+        else:
+            # Get all guests
+            guests = await db.get_all_guests()
+            if guests:
+                guest_list = "\n".join([
+                    f"• {guest['name']} ({guest['email']}) - RSVP: {guest['rsvp']}"
+                    for guest in guests
+                ])
+                return ListGuestsResponse(
+                    result=f"All guests:\n{guest_list}"
+                )
+            else:
+                return ListGuestsResponse(
+                    result="No guests found in the database"
+                )
+            
+    except Exception as e:
+        return ListGuestsResponse(
+            result=f"❌ Error listing guests: {str(e)}"
+        )
+
+
+@app.post("/tools/follow_up", response_model=FollowUpResponse)
+async def follow_up(request: FollowUpRequest):
+    """
+    Send follow-up emails to all guests with 'maybe' RSVP status.
+    """
+    if not db or not email_service:
+        raise HTTPException(status_code=500, detail="Server not initialized")
+    
+    try:
+        # Get all guests with 'maybe' RSVP status
+        maybe_guests = await db.get_maybe_guests()
+        
+        if not maybe_guests:
+            return FollowUpResponse(
+                result="No guests with 'maybe' RSVP status found. No follow-up emails sent."
+            )
+        
+        # Send follow-up emails
+        successful_sends = 0
+        failed_sends = 0
+        
+        for guest in maybe_guests:
+            email_sent = email_service.send_follow_up(guest['email'], guest['name'])
+            if email_sent:
+                successful_sends += 1
+            else:
+                failed_sends += 1
+        
+        return FollowUpResponse(
+            result=f"✅ Follow-up emails sent to {successful_sends} guests with 'maybe' RSVP status. "
+                   f"{'❌ Failed to send to ' + str(failed_sends) + ' guests.' if failed_sends > 0 else ''}"
+        )
+            
+    except Exception as e:
+        return FollowUpResponse(
+            result=f"❌ Error sending follow-up emails: {str(e)}"
+        )
+
+
+@app.post("/tools/process_email_response", response_model=ProcessEmailResponse)
+async def process_email_response(request: ProcessEmailRequest):
+    """
+    Process email response and update RSVP if needed.
+    """
+    if not db:
+        raise HTTPException(status_code=500, detail="Server not initialized")
+    
+    try:
+        # 1. Check if sender is in our guest list
+        guest = await db.get_guest_by_email(request.sender_email)
+        if not guest:
+            return ProcessEmailResponse(
+                result=f"❌ Sender {request.sender_email} not found in guest list"
+            )
+        
+        # 2. Analyze email content for RSVP
+        analysis = await analyze_email_for_rsvp(request.email_content)
+        
+        # 3. Update RSVP if analysis found one with high confidence
+        if analysis.get('rsvp_status') and analysis.get('confidence', 0) > 0.7:
+            await db.update_guest_rsvp(request.sender_email, analysis['rsvp_status'])
+            return ProcessEmailResponse(
+                result=f"✅ Updated {guest['name']}'s RSVP to '{analysis['rsvp_status']}' (confidence: {analysis['confidence']:.2f})"
+            )
+        elif analysis.get('rsvp_status'):
+            return ProcessEmailResponse(
+                result=f"⚠️ Low confidence analysis for {guest['name']}: {analysis['rsvp_status']} (confidence: {analysis['confidence']:.2f}). Manual review recommended."
+            )
+        else:
+            return ProcessEmailResponse(
+                result=f"📧 Email from {guest['name']} processed, no RSVP information found"
+            )
+            
+    except Exception as e:
+        return ProcessEmailResponse(
+            result=f"❌ Error processing email: {str(e)}"
         )
 
 

@@ -2,8 +2,14 @@ import { getMCPClient } from '@/services/mcp/client';
 
 export async function GET() {
   try {
-    const mcpClient = getMCPClient();
-    const guests = await mcpClient.listGuests();
+    // Use the resources endpoint that returns actual guest data
+    const response = await fetch('http://localhost:8000/resources/list_guests');
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const guests = await response.json();
     
     // Transform the data to match the expected format
     const transformedGuests = guests.map((guest: any) => ({
