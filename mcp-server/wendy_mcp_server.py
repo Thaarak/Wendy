@@ -16,18 +16,29 @@ from typing import Any, List, Optional
 import json
 
 import aiosqlite
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import openai
 import asyncio
 import sqlite3
 from email_monitor import EmailMonitor
+from agent_orchestrator import AgentOrchestrator
 
 app = FastAPI(
     title="Wendy Wedding Planning Server",
     description="AI-powered wedding planning assistant with guest management and email invitations.",
     version="1.0.0"
 )
+
+# Add test_db endpoint here
+@app.get("/test_db")
+async def test_db():
+    global db
+    if not db:
+        return {"error": "DB not initialized"}
+    guests = await db.get_all_guests()
+    return {"guests": guests}
 
 
 # Pydantic models
@@ -288,6 +299,7 @@ db: Database | None = None
 email_service: EmailService | None = None
 openai_client: openai.OpenAI | None = None
 email_monitor: EmailMonitor | None = None
+agent_orchestrator: AgentOrchestrator | None = None
 
 
 async def analyze_email_for_rsvp(email_content: str) -> dict:
@@ -339,7 +351,7 @@ async def analyze_email_for_rsvp(email_content: str) -> dict:
 @app.on_event("startup")
 async def startup_event():
     """Initialize database, email service, and start automatic email monitoring for Wendy's own inbox on startup."""
-    global db, email_service, email_monitor
+    global db, email_service, email_monitor, agent_orchestrator
     
     # Setup database
     db_path = Path(__file__).parent / "wedding.db"
@@ -354,9 +366,22 @@ async def startup_event():
     # Setup and start email monitor (always for Wendy's own inbox)
     email_monitor = EmailMonitor(db, email_service)
     print("✅ Email monitor initialized")
-    # Start monitoring automatically, every 5 minutes
-    email_monitor.start_monitoring(interval_minutes=5)
+    # Start monitoring automatically, every 30 seconds for demo
+    email_monitor.start_monitoring(interval_minutes=0.25)
     print("🔄 Automatic email monitoring started for wendy.weddingplanning@gmail.com")
+
+    agent_orchestrator = AgentOrchestrator(
+        db,
+        email_service,
+        smtp_user=email_service.smtp_user,
+        smtp_pass=email_service.smtp_pass,
+        openai_api_key=None  # Uses default or env var
+    )
+    print("✅ Agent orchestrator initialized")
+
+    # Set the orchestrator on the email monitor to avoid circular import
+    email_monitor.agent_orchestrator = agent_orchestrator
+    print("✅ Email monitor linked to agent orchestrator")
 
 
 @app.on_event("shutdown")
@@ -375,192 +400,20 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
-@app.post("/tools/send_invite", response_model=SendInviteResponse)
-async def send_invite(request: SendInviteRequest):
+@app.post("/agent")
+async def agent_endpoint(request: Request):
     """
-    Send a wedding invitation email and add the guest to the database.
+    Unified endpoint for chat/email triggers. Accepts JSON: {"message": ..., "context": {...}}
+    Calls the agent orchestrator and returns the result.
     """
-    if not db or not email_service:
-        raise HTTPException(status_code=500, detail="Server not initialized")
-    
-    try:
-        # Send email invitation
-        guest_name = request.name or request.email
-        email_sent = email_service.send_invitation(request.email, guest_name)
-        
-        if not email_sent:
-            return SendInviteResponse(
-                result=f"❌ Failed to send invitation to {request.email}. Please try again."
-            )
-        
-        # Add guest to database
-        guest_data = await db.add_guest(guest_name, request.email)
-        
-        if guest_data:
-            return SendInviteResponse(
-                result=f"✅ Invitation sent to {request.email} and guest added to the database!"
-            )
-        else:
-            return SendInviteResponse(
-                result=f"✅ Invitation sent to {request.email}, but there was an issue adding to database."
-            )
-            
-    except Exception as e:
-        return SendInviteResponse(
-            result=f"❌ Error processing invitation for {request.email}: {str(e)}"
-        )
-
-
-
-@app.post("/tools/update_rsvp", response_model=UpdateRSVPResponse)
-async def update_rsvp(request: UpdateRSVPRequest):
-    """
-    Update the RSVP status for a guest.
-    """
-    if not db:
-        raise HTTPException(status_code=500, detail="Server not initialized")
-    
-    try:
-        updated_guest = await db.update_guest_rsvp(request.email, request.rsvp)
-        
-        if updated_guest:
-            return UpdateRSVPResponse(
-                result=f"✅ RSVP updated for {request.email} to '{request.rsvp}'"
-            )
-        else:
-            return UpdateRSVPResponse(
-                result=f"❌ Guest with email {request.email} not found."
-            )
-            
-    except Exception as e:
-        return UpdateRSVPResponse(
-            result=f"❌ Error updating RSVP for {request.email}: {str(e)}"
-        )
-
-
-@app.post("/tools/list_guests", response_model=ListGuestsResponse)
-async def list_guests(request: ListGuestsRequest):
-    """
-    List guests with optional RSVP filtering.
-    """
-    if not db:
-        raise HTTPException(status_code=500, detail="Server not initialized")
-    
-    try:
-        if request.rsvp_filter:
-            # Filter by RSVP status
-            guests = await db.get_guests_by_rsvp(request.rsvp_filter)
-            if guests:
-                guest_list = "\n".join([
-                    f"• {guest['name']} ({guest['email']}) - RSVP: {guest['rsvp']}"
-                    for guest in guests
-                ])
-                return ListGuestsResponse(
-                    result=f"Guests with RSVP '{request.rsvp_filter}':\n{guest_list}"
-                )
-            else:
-                return ListGuestsResponse(
-                    result=f"No guests found with RSVP status '{request.rsvp_filter}'"
-                )
-        else:
-            # Get all guests
-            guests = await db.get_all_guests()
-            if guests:
-                guest_list = "\n".join([
-                    f"• {guest['name']} ({guest['email']}) - RSVP: {guest['rsvp']}"
-                    for guest in guests
-                ])
-                return ListGuestsResponse(
-                    result=f"All guests:\n{guest_list}"
-                )
-            else:
-                return ListGuestsResponse(
-                    result="No guests found in the database"
-                )
-            
-    except Exception as e:
-        return ListGuestsResponse(
-            result=f"❌ Error listing guests: {str(e)}"
-        )
-
-
-@app.post("/tools/follow_up", response_model=FollowUpResponse)
-async def follow_up(request: FollowUpRequest):
-    """
-    Send follow-up emails to all guests with 'maybe' RSVP status.
-    """
-    if not db or not email_service:
-        raise HTTPException(status_code=500, detail="Server not initialized")
-    
-    try:
-        # Get all guests with 'maybe' RSVP status
-        maybe_guests = await db.get_maybe_guests()
-        
-        if not maybe_guests:
-            return FollowUpResponse(
-                result="No guests with 'maybe' RSVP status found. No follow-up emails sent."
-            )
-        
-        # Send follow-up emails
-        successful_sends = 0
-        failed_sends = 0
-        
-        for guest in maybe_guests:
-            email_sent = email_service.send_follow_up(guest['email'], guest['name'])
-            if email_sent:
-                successful_sends += 1
-            else:
-                failed_sends += 1
-        
-        return FollowUpResponse(
-            result=f"✅ Follow-up emails sent to {successful_sends} guests with 'maybe' RSVP status. "
-                   f"{'❌ Failed to send to ' + str(failed_sends) + ' guests.' if failed_sends > 0 else ''}"
-        )
-            
-    except Exception as e:
-        return FollowUpResponse(
-            result=f"❌ Error sending follow-up emails: {str(e)}"
-        )
-
-
-@app.post("/tools/process_email_response", response_model=ProcessEmailResponse)
-async def process_email_response(request: ProcessEmailRequest):
-    """
-    Process email response and update RSVP if needed.
-    """
-    if not db:
-        raise HTTPException(status_code=500, detail="Server not initialized")
-    
-    try:
-        # 1. Check if sender is in our guest list
-        guest = await db.get_guest_by_email(request.sender_email)
-        if not guest:
-            return ProcessEmailResponse(
-                result=f"❌ Sender {request.sender_email} not found in guest list"
-            )
-        
-        # 2. Analyze email content for RSVP
-        analysis = await analyze_email_for_rsvp(request.email_content)
-        
-        # 3. Update RSVP if analysis found one with high confidence
-        if analysis.get('rsvp_status') and analysis.get('confidence', 0) > 0.7:
-            await db.update_guest_rsvp(request.sender_email, analysis['rsvp_status'])
-            return ProcessEmailResponse(
-                result=f"✅ Updated {guest['name']}'s RSVP to '{analysis['rsvp_status']}' (confidence: {analysis['confidence']:.2f})"
-            )
-        elif analysis.get('rsvp_status'):
-            return ProcessEmailResponse(
-                result=f"⚠️ Low confidence analysis for {guest['name']}: {analysis['rsvp_status']} (confidence: {analysis['confidence']:.2f}). Manual review recommended."
-            )
-        else:
-            return ProcessEmailResponse(
-                result=f"📧 Email from {guest['name']} processed, no RSVP information found"
-            )
-            
-    except Exception as e:
-        return ProcessEmailResponse(
-            result=f"❌ Error processing email: {str(e)}"
-        )
+    global agent_orchestrator
+    data = await request.json()
+    message = data.get("message")
+    context = data.get("context")
+    if not message:
+        return JSONResponse({"error": "Missing message"}, status_code=400)
+    result = await agent_orchestrator.handle_event(message, context)
+    return JSONResponse(result)
 
 
 @app.get("/resources/list_guests", response_model=List[Guest])

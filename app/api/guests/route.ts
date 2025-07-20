@@ -2,15 +2,14 @@ import { getMCPClient } from '@/services/mcp/client';
 
 export async function GET() {
   try {
-    // Use the resources endpoint that returns actual guest data
-    const response = await fetch('http://localhost:8000/resources/list_guests');
-    
+    // Use the fast test_db endpoint for demo
+    const response = await fetch('http://localhost:8000/test_db');
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
-    
-    const guests = await response.json();
-    
+    const data = await response.json();
+    // data.guests is the array
+    const guests = data.guests || [];
     // Transform the data to match the expected format
     const transformedGuests = guests.map((guest: any) => ({
       id: guest.id,
@@ -19,8 +18,7 @@ export async function GET() {
       rsvp: guest.rsvp,
       createdAt: guest.created_at, // Transform created_at to createdAt
     }));
-    
-    return new Response(JSON.stringify(transformedGuests), { 
+    return new Response(JSON.stringify(transformedGuests), {
       status: 200,
       headers: {
         'Content-Type': 'application/json',
@@ -28,7 +26,7 @@ export async function GET() {
     });
   } catch (error) {
     console.error('Error fetching guests:', error);
-    return new Response(JSON.stringify({ error: 'Failed to fetch guests' }), { 
+    return new Response(JSON.stringify({ error: 'Failed to fetch guests' }), {
       status: 500,
       headers: {
         'Content-Type': 'application/json',

@@ -11,6 +11,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import schedule
 import threading
+# REMOVE: from wendy_mcp_server import agent_orchestrator
 
 # Gmail API scopes
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -25,6 +26,8 @@ class EmailMonitor:
         self.is_running = False
         # Wendy's email is hardcoded
         self.account_email = "wendy.weddingplanning@gmail.com"
+        self.agent_orchestrator = None  # Will be set after initialization
+        self.seen_message_ids = set()  # Track processed emails
         
     def authenticate_gmail(self):
         """Authenticate with Gmail API using OAuth2 for Wendy's own account only."""
@@ -75,55 +78,36 @@ class EmailMonitor:
             return False
     
     async def check_for_replies(self):
-        """Check Gmail for replies to wedding invitations."""
+        """Check Gmail for any new emails (not just from guests)."""
         if not self.service:
             print("❌ Gmail service not initialized")
             return
-        
         try:
-            # Get all guests from database
-            guests = await self.db.get_all_guests()
-            guest_emails = [guest['email'] for guest in guests]
-            
-            # Search for emails from guests
-            query = f"from:({' OR '.join(guest_emails)})"
-            if self.last_check_time:
-                # Only check emails after last check
-                query += f" after:{self.last_check_time.strftime('%Y/%m/%d')}"
-            
-            print(f"🔍 Checking for emails with query: {query}")
-            
-            # Search for messages
-            results = self.service.users().messages().list(
-                userId='me', 
-                q=query,
-                maxResults=50
-            ).execute()
-            
+            query = ""
+            print(f"🔍 Checking for emails with query: {query or '[all emails]'}")
+            results = self.service.users().messages().list(userId='me', q=query, maxResults=50).execute()
             messages = results.get('messages', [])
-            
             if not messages:
                 print("📧 No new emails found")
                 return
-            
             print(f"📧 Found {len(messages)} potential reply emails")
-            
-            # Process each message
             for message in messages:
-                await self.process_email_message(message['id'])
-            
-            # Update last check time
+                msg_id = message['id']
+                if msg_id in self.seen_message_ids:
+                    continue
+                msg_meta = self.service.users().messages().get(userId='me', id=msg_id, format='metadata').execute()
+                internal_date = int(msg_meta['internalDate'])
+                if internal_date > getattr(self, 'startup_internal_date', 0):
+                    await self.process_email_message(msg_id)
+                    self.seen_message_ids.add(msg_id)
+            import time
             self.last_check_time = datetime.now()
-            
-        except HttpError as error:
-            print(f"❌ Gmail API error: {error}")
         except Exception as e:
             print(f"❌ Error checking for replies: {e}")
     
     async def process_email_message(self, message_id: str):
         """Process a single email message."""
         try:
-            # Get the full message
             message = self.service.users().messages().get(
                 userId='me', 
                 id=message_id,
@@ -134,6 +118,7 @@ class EmailMonitor:
             headers = message['payload']['headers']
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
             from_header = next((h['value'] for h in headers if h['name'] == 'From'), '')
+            message_id_header = next((h['value'] for h in headers if h['name'] == 'Message-ID'), None)
             
             # Extract sender email
             sender_email = self.extract_email_from_header(from_header)
@@ -143,23 +128,31 @@ class EmailMonitor:
             
             print(f"📧 Processing email from {sender_email}: {subject[:50]}...")
             
-            # Check if sender is in our guest list
-            guest = await self.db.get_guest_by_email(sender_email)
-            if not guest:
-                print(f"⚠️ Sender {sender_email} not in guest list, skipping")
+            # Skip if sender is Wendy herself
+            if sender_email.lower() == self.account_email.lower():
+                print(f"Skipping own email: {sender_email}")
                 return
-            
-            # Analyze email for RSVP
-            analysis = await self.analyze_email_for_rsvp(email_content)
-            
-            # Update RSVP if high confidence
-            if analysis.get('rsvp_status') and analysis.get('confidence', 0) > 0.7:
-                await self.db.update_guest_rsvp(sender_email, analysis['rsvp_status'])
-                print(f"✅ Updated {guest['name']}'s RSVP to '{analysis['rsvp_status']}' (confidence: {analysis['confidence']:.2f})")
-            elif analysis.get('rsvp_status'):
-                print(f"⚠️ Low confidence analysis for {guest['name']}: {analysis['rsvp_status']} (confidence: {analysis['confidence']:.2f})")
+
+            # Build context for the agent
+            context = {
+                "source": "email",
+                "sender_email": sender_email,
+                "subject": subject,
+                "in_reply_to": message.get('threadId'),
+                "raw_email": email_content,
+            }
+            # Call the agent orchestrator
+            if self.agent_orchestrator:
+                result = await self.agent_orchestrator.handle_event(email_content, context=context)
+                # If the agent returns a reply, send it as a confirmation email
+                reply_message = result.get('reply') or result.get('reply_message')
+                if reply_message:
+                    await self.send_confirmation_email(sender_email, reply_message, in_reply_to=message_id_header)
+                else:
+                    # Default simple confirmation
+                    await self.send_confirmation_email(sender_email, "Your RSVP has been recorded. Thank you!", in_reply_to=message_id_header)
             else:
-                print(f"📧 Email from {guest['name']} processed, no RSVP information found")
+                print("⚠️ Agent orchestrator not initialized")
                 
         except Exception as e:
             print(f"❌ Error processing message {message_id}: {e}")
@@ -234,37 +227,79 @@ class EmailMonitor:
                 "reasoning": f"Error analyzing email: {str(e)}"
             }
     
+    async def send_confirmation_email(self, to_email: str, message: str, in_reply_to: str = None):
+        """Send a simple confirmation email to the sender, replying to the original email."""
+        import asyncio
+        from email.mime.text import MIMEText
+        smtp_host = "smtp.gmail.com"
+        smtp_port = 465
+        smtp_user = "wendy.weddingplanning@gmail.com"
+        smtp_pass = self.email_service.smtp_pass if hasattr(self.email_service, 'smtp_pass') else None
+        msg = MIMEText(message, 'plain')
+        msg['Subject'] = 'RSVP Confirmation'
+        msg['From'] = smtp_user
+        msg['To'] = to_email
+        if in_reply_to:
+            msg['In-Reply-To'] = in_reply_to
+            msg['References'] = in_reply_to
+        loop = asyncio.get_event_loop()
+        def send_email():
+            import smtplib
+            with smtplib.SMTP_SSL(smtp_host, smtp_port) as server:
+                server.login(smtp_user, smtp_pass)
+                server.send_message(msg)
+        await loop.run_in_executor(None, send_email)
+        print(f"✅ Sent confirmation email to {to_email}")
+    
     def start_monitoring(self, interval_minutes: int = 5):
         """Start the email monitoring service for Wendy's own inbox only."""
         if self.is_running:
             print("⚠️ Email monitoring is already running")
             return
-        
         if not self.authenticate_gmail():
             print("❌ Failed to authenticate Gmail, cannot start monitoring")
             return
-        
         self.is_running = True
         print(f"🔄 Starting email monitoring for {self.account_email} (checking every {interval_minutes} minutes)")
-        
+        import asyncio
+        self.main_loop = asyncio.get_event_loop()  # Store the main event loop
+        # On startup, record the latest message's internalDate
+        try:
+            results = self.service.users().messages().list(userId='me', maxResults=1, q='').execute()
+            if 'messages' in results:
+                msg = self.service.users().messages().get(userId='me', id=results['messages'][0]['id'], format='metadata').execute()
+                self.startup_internal_date = int(msg['internalDate'])
+            else:
+                import time
+                self.startup_internal_date = int(time.time() * 1000)
+            print(f"📅 Only processing emails after: {self.startup_internal_date}")
+        except Exception as e:
+            print(f"⚠️ Could not determine startup internalDate: {e}")
+            import time
+            self.startup_internal_date = int(time.time() * 1000)
         # Schedule the monitoring task
         schedule.every(interval_minutes).minutes.do(self.run_check)
-        
         # Run in a separate thread
         def run_scheduler():
+            import time
             while self.is_running:
                 schedule.run_pending()
                 time.sleep(1)
-        
         self.scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
         self.scheduler_thread.start()
-        
         # Run initial check
-        asyncio.create_task(self.check_for_replies())
-    
+        if hasattr(self, 'main_loop'):
+            asyncio.run_coroutine_threadsafe(self.check_for_replies(), self.main_loop)
+        else:
+            print("⚠️ No main event loop found for initial async email check")
+
     def run_check(self):
-        """Wrapper to run the async check function."""
-        asyncio.create_task(self.check_for_replies())
+        """Wrapper to run the async check function from a thread."""
+        import asyncio
+        if hasattr(self, 'main_loop'):
+            asyncio.run_coroutine_threadsafe(self.check_for_replies(), self.main_loop)
+        else:
+            print("⚠️ No main event loop found for async email check")
     
     def stop_monitoring(self):
         """Stop the email monitoring service."""
