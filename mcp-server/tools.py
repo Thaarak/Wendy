@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 import os
 import httpx
+<<<<<<< Updated upstream
 import re
 import os
 import httpx
@@ -13,6 +14,10 @@ import anthropic
 import re
 from dotenv import load_dotenv
 load_dotenv()
+=======
+import anthropic
+import re
+>>>>>>> Stashed changes
 
 # --- Tool: Send Invite ---
 class SendInviteTool:
@@ -302,6 +307,7 @@ class FindVenuesTool:
             if not self.anthropic_api_key:
                 return {"success": False, "message": "ANTHROPIC_API_KEY not set in environment.", "venues": []}
 
+<<<<<<< Updated upstream
             http_client = httpx.Client(
                 headers={
                     "anthropic-beta": "web-search-2025-03-05",
@@ -409,7 +415,101 @@ Present the gathered information in the following format only and nothing else. 
                 "success": True,
                 "venues": venues,
                 "message": f"Found {len(venues)} venues in {location}."
+=======
+            url = "https://api.anthropic.com/v1/messages"
+            headers = {
+                "x-api-key": self.anthropic_api_key,
+                "anthropic-beta": "web-search-2025-03-05",
+                "content-type": "application/json"
+>>>>>>> Stashed changes
             }
+            prompt = f"""
+The user is looking for wedding venues in: {location}
+
+Please perform the following tasks:
+1. Use the web search tool to find wedding venues in {location}
+2. Select 3 top results from the search. Avoid encrypted pages
+3. For each selected venue:
+   a. Visit the venue's website
+   b. Scrape the following essential information:
+       - Venue name
+       - Address
+       - Email contact
+       - Phone number (if available)
+       - Capacity (if available)
+       - Website URL (if available)
+
+Present the gathered information in the following format only and nothing else. Do not show your reasoning, planning, or any intermediate steps:
+
+<venues>
+<venue>
+<name>[Venue Name]</name>
+<address>[Full Address]</address>
+<email>[Email Address]</email>
+<phone>[Phone Number]</phone>
+<capacity>[Capacity Information]</capacity>
+<website>[Website URL]</website>
+</venue>
+[Repeat for each venue]
+</venues>
+
+If you cannot find any suitable venues in the specified location, respond with:
+
+<error>Unable to find wedding venues in {location}. Please try a different location or expand your search area.</error>
+"""
+            payload = {
+                "model": "claude-3-sonnet-20240229",
+                "max_tokens": 1024,
+                "temperature": 1,
+                "system": "You are an AI agent designed to help with wedding planning. You have access to a tool which performs web searches to find and gather information about wedding venues in a specified location. Respond only with the final answer relevant to the user query. Do not show your reasoning, planning, or any intermediate steps. Format the response clearly with Markdown headings and bullet points as appropriate.",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": prompt}]
+                    }
+                ],
+                "tools": [
+                    {
+                        "name": "web_search",
+                        "type": "web_search_20250305",
+                        "max_uses": 5
+                    }
+                ]
+            }
+            with httpx.Client(timeout=60) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                # Claude's response is in data['content'] (list of dicts with 'text')
+                result = "".join([c.get("text", "") for c in data.get("content", [])])
+                venues = []
+                venues_match = re.search(r"<venues>([\s\S]*?)</venues>", result)
+                if venues_match:
+                    venues_block = venues_match.group(1)
+                    venue_regex = re.compile(r"<venue>([\s\S]*?)</venue>")
+                    for match in venue_regex.finditer(venues_block):
+                        venue_xml = match.group(1)
+                        def extract(tag):
+                            m = re.search(rf"<{tag}>([\s\S]*?)</{tag}>", venue_xml)
+                            return m.group(1).strip() if m else ""
+                        venues.append({
+                            "name": extract("name"),
+                            "address": extract("address"),
+                            "email": extract("email"),
+                            "phone": extract("phone"),
+                            "capacity": extract("capacity"),
+                            "website": extract("website"),
+                        })
+                elif "<error>" in result:
+                    return {"success": False, "venues": [], "message": result}
+                else:
+                    return {"success": False, "venues": [], "message": "No venues found in response."}
+
+                return {
+                    "success": True,
+                    "venues": venues,
+                    "message": f"Found {len(venues)} venues in {location}."
+                }
         except Exception as e:
             print(f"❌ Error in FindVenuesTool: {e}")
             return {"success": False, "venues": [], "message": f"❌ Error finding venues: {str(e)}"}

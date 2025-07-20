@@ -16,8 +16,16 @@ from typing import Any, List, Optional
 import json
 
 # Load environment variables from .env
+<<<<<<< Updated upstream
 from dotenv import load_dotenv
 load_dotenv()
+=======
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    print("[WARNING] python-dotenv not installed. .env file will not be loaded.")
+>>>>>>> Stashed changes
 
 import aiosqlite
 from fastapi import FastAPI, HTTPException, Request
