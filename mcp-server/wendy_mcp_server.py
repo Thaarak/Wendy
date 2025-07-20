@@ -319,16 +319,48 @@ async def find_venues(request: FindVenuesRequest):
         # Create the message with the beta API and web search tools
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=20000,
+            max_tokens=1024,
             temperature=1,
-            system="You are an AI agent designed to help with wedding planning. You have access to web search tools to find and gather information about wedding venues in a specified location. Your task is to use these tools effectively and present the results to the user.\n",
+            system="You are an AI agent designed to help with wedding planning. You have access to a tool which performs web searches to find and gather information about wedding venues in a specified location. Respond only with the final answer relevant to the user query. Do not show your reasoning, planning, or any intermediate steps. Format the response clearly with Markdown headings and bullet points as appropriate. ",
             messages=[
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "text",
-                            "text": f"The user is looking for wedding venues in: {request.location}\n\nPlease perform the following tasks:\n1. Use the web search tool to find wedding venues in {request.location}\n2. Select 3-5 top results from the search\n3. For each selected venue:\n   a. Visit the venue's website\n   b. Scrape the following essential information:\n      - Venue name\n      - Address\n      - Email contact\n      - Phone number (if available)\n      - Capacity (if available)\n      - Indoor/outdoor options (if available)\n      - Brief description (1-2 sentences)\n\nPresent the gathered information in the following format:\n\n<venues>\n<venue>\n<name>[Venue Name]</name>\n<address>[Full Address]</address>\n<email>[Email Address]</email>\n<phone>[Phone Number]</phone>\n<capacity>[Capacity Information]</capacity>\n<options>[Indoor/Outdoor Options]</options>\n<description>[Brief Description]</description>\n</venue>\n[Repeat for each venue]\n</venues>\n\nIf you encounter any errors or cannot find sufficient information for a venue, include a note in the <description> tag explaining the issue.\n\nIf you cannot find any suitable venues in the specified location, respond with:\n\n<error>Unable to find wedding venues in {request.location}. Please try a different location or expand your search area.</error>\n\nAfter presenting the venue information, ask the user if they would like more details about any specific venue or if they have any questions about the options presented.\n\nRemember to maintain a helpful and friendly tone throughout the interaction, as wedding planning can be stressful for users."
+                            "text": f"""
+                                The user is looking for wedding venues in: {request.location}
+
+                                Please perform the following tasks:
+                                1. Use the web search tool to find wedding venues in {request.location}
+                                2. Select 3 top results from the search. Avoid encrypted pages
+                                3. For each selected venue:
+                                a. Visit the venue's website
+                                b. Scrape the following essential information:
+                                    - Venue name
+                                    - Address
+                                    - Email contact
+                                    - Phone number (if available)
+                                    - Capacity (if available)
+
+                                Present the gathered information in the following format only and nothing else. Do not show your reasoning, planning, or any intermediate steps:
+                                
+                                <venues>
+                                <venue>
+                                <name>[Venue Name]</name>
+                                <address>[Full Address]</address>
+                                <email>[Email Address]</email>
+                                <phone>[Phone Number]</phone>
+                                <capacity>[Capacity Information]</capacity>    
+                                </venue>
+                                [Repeat for each venue]
+                                </venues>
+
+                                If you cannot find any suitable venues in the specified location, respond with:
+
+                                <error>Unable to find wedding venues in {request.location}. Please try a different location or expand your search area.</error>
+
+                                """
                         }
                     ]
                 }
@@ -336,7 +368,8 @@ async def find_venues(request: FindVenuesRequest):
             tools=[
                 {
                     "name": "web_search",
-                    "type": "web_search_20250305"
+                    "type": "web_search_20250305",
+                    "max_uses": 5
                 }
             ]
             

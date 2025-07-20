@@ -97,6 +97,30 @@ export class WendyMCPClient {
       throw error;
     }
   }
+
+  async findVenues(location: string): Promise<string> {
+    try {
+      const response = await fetch(`${this.baseUrl}/tools/find_venues`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          location,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      return result.result || 'Venue search completed';
+    } catch (error) {
+      console.error('Error finding venues:', error);
+      throw error;
+    }
+  }
 }
 
 // Singleton instance
