@@ -23,12 +23,26 @@ class SendInviteTool:
         self.db = db  # Add db reference for adding guest
     async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
         try:
+            # Always fetch the latest wedding details from DB right before sending
+            details = await self.db.get_wedding_details() if self.db else {"couple_names": "", "wedding_date": "", "location": ""}
+            missing = []
+            if not details.get('couple_names'):
+                missing.append('couple names')
+            if not details.get('wedding_date'):
+                missing.append('wedding date')
+            if not details.get('location'):
+                missing.append('location')
+            if missing:
+                return {"success": False, "message": f"Please provide the following wedding details before sending invites: {', '.join(missing)}."}
             msg = MIMEText(f"""
                 Dear {input.get('name', 'Guest')},
                 You are cordially invited to our wedding!
+                Date: {details['wedding_date']}
+                Location: {details['location']}
+                We would be honored by your presence on our special day.
                 Please RSVP at your earliest convenience.
                 Best regards,
-                The Happy Couple
+                Wendy ({details['couple_names']})
             """, 'plain')
             msg['Subject'] = 'You are invited to our wedding!'
             msg['From'] = self.smtp_user
@@ -169,6 +183,32 @@ class ProcessEmailResponseTool:
         except Exception as e:
             return {"success": False, "message": f"Failed to process email: {e}"}
 
+# --- Tool: Update Wedding Details ---
+class UpdateWeddingDetailsTool:
+    name = "update_wedding_details"
+    description = """
+    Update any or all wedding details (couple names, wedding date, location).
+    Input: { "couple_names"?: string, "wedding_date"?: string, "location"?: string }
+    Output: { "success": true, "message": "Wedding details updated!" }
+    When to use: Whenever the user provides or wants to update any wedding detail, even if only one field is provided. You can use this tool to update just the date, just the location, just the couple names, or any combination.
+    Example: "Change the wedding date to July 27", "Set the location to The Park", "Update the couple names to Alex and Jamie"
+    """
+    def __init__(self, db):
+        self.db = db
+    async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            # Fetch current details
+            current = await self.db.get_wedding_details()
+            couple_names = input.get('couple_names', current.get('couple_names', ''))
+            wedding_date = input.get('wedding_date', current.get('wedding_date', ''))
+            location = input.get('location', current.get('location', ''))
+            if not (couple_names or wedding_date or location):
+                return {"success": False, "message": "Please provide at least one wedding detail to update (couple_names, wedding_date, or location)."}
+            await self.db.set_wedding_details(couple_names, wedding_date, location)
+            return {"success": True, "message": "Wedding details updated!"}
+        except Exception as e:
+            return {"success": False, "message": f"Failed to update wedding details: {e}"}
+
 # --- Tool Registry ---
 class ToolRegistry:
     def __init__(self, db, email_service, smtp_user, smtp_pass, openai_api_key):
@@ -178,6 +218,7 @@ class ToolRegistry:
             ListGuestsTool(db),
             FollowUpTool(db, email_service),
             ProcessEmailResponseTool(db, openai_api_key),
+            UpdateWeddingDetailsTool(db),  # Register the new tool
         ]
     def get_tools(self) -> List[Any]:
         return self.tools

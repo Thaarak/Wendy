@@ -93,6 +93,16 @@ class ProcessEmailResponse(BaseModel):
     result: str
 
 
+class WeddingDetails(BaseModel):
+    couple_names: str
+    wedding_date: str
+    location: str
+
+class WeddingDetailsResponse(BaseModel):
+    couple_names: str
+    wedding_date: str
+    location: str
+
 # Database helper class
 class Database:
     """Simple async wrapper for SQLite."""
@@ -130,6 +140,22 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
+        )
+
+        # Create wedding_details table (single row)
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS wedding_details (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                couple_names TEXT,
+                wedding_date TEXT,
+                location TEXT
+            )
+            """
+        )
+        # Ensure a row always exists
+        await cursor.execute(
+            "INSERT OR IGNORE INTO wedding_details (id, couple_names, wedding_date, location) VALUES (1, '', '', '')"
         )
 
         await self.conn.commit()
@@ -209,6 +235,22 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def get_wedding_details(self) -> dict:
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+        cursor = await self.conn.execute("SELECT * FROM wedding_details WHERE id = 1")
+        row = await cursor.fetchone()
+        return dict(row) if row else {"couple_names": "", "wedding_date": "", "location": ""}
+
+    async def set_wedding_details(self, couple_names: str, wedding_date: str, location: str):
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+        await self.conn.execute(
+            "UPDATE wedding_details SET couple_names = ?, wedding_date = ?, location = ? WHERE id = 1",
+            (couple_names, wedding_date, location)
+        )
+        await self.conn.commit()
+
 
 # Email helper class
 class EmailService:
@@ -220,8 +262,18 @@ class EmailService:
         self.smtp_user = "wendy.weddingplanning@gmail.com"
         self.smtp_pass = "ovzy uzkz szmm vech"  # App password
         
-    def send_invitation(self, to_email: str, guest_name: str = None) -> bool:
-        """Send a wedding invitation email."""
+    def send_invitation(self, to_email: str, guest_name: str = None, couple_names: str = None, wedding_date: str = None, location: str = None) -> bool:
+        """Send a wedding invitation email. Requires all wedding details."""
+        # Check for missing details
+        missing = []
+        if not couple_names:
+            missing.append('couple_names')
+        if not wedding_date:
+            missing.append('wedding_date')
+        if not location:
+            missing.append('location')
+        if missing:
+            raise ValueError(f"Missing wedding details: {', '.join(missing)}")
         try:
             # Create message
             msg = MIMEText(
@@ -230,27 +282,26 @@ class EmailService:
                 
                 You are cordially invited to our wedding!
                 
+                Date: {wedding_date}
+                Location: {location}
+                
                 We would be honored by your presence on our special day.
                 Please RSVP at your earliest convenience.
                 
                 Best regards,
-                The Happy Couple
+                Wendy ({couple_names})
                 """,
                 'plain'
             )
-            
             msg['Subject'] = 'You are invited to our wedding!'
             msg['From'] = self.smtp_user
             msg['To'] = to_email
-            
             # Send email
             with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
                 server.login(self.smtp_user, self.smtp_pass)
                 server.send_message(msg)
-                
             print(f"✅ Invitation sent to {to_email}")
             return True
-            
         except Exception as e:
             print(f"❌ Failed to send invitation to {to_email}: {e}")
             return False
@@ -459,6 +510,23 @@ async def get_guest(guest_id: int):
             )
     
     raise HTTPException(status_code=404, detail="Guest not found")
+
+
+@app.get("/wedding/details", response_model=WeddingDetailsResponse)
+async def get_wedding_details():
+    global db
+    if not db:
+        raise HTTPException(status_code=500, detail="Server not initialized")
+    details = await db.get_wedding_details()
+    return WeddingDetailsResponse(**details)
+
+@app.post("/wedding/details", response_model=WeddingDetailsResponse)
+async def set_wedding_details(details: WeddingDetails):
+    global db
+    if not db:
+        raise HTTPException(status_code=500, detail="Server not initialized")
+    await db.set_wedding_details(details.couple_names, details.wedding_date, details.location)
+    return details
 
 
 if __name__ == "__main__":
