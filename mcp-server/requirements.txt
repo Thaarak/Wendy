@@ -1,4 +1,5 @@
 enrichmcp
 aiosqlite
 fastapi
-uvicorn[standard] 
+uvicorn[standard]
+anthropic 

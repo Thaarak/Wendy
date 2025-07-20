@@ -5,22 +5,25 @@ This server provides HTTP endpoints for wedding planning including:
 - Guest management with SQLite database
 - Email invitation system
 - RSVP tracking
+- Venue finding with AI
 """
 
 import os
+import httpx
 import smtplib
 from datetime import datetime
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Any, List, Optional
 
+import anthropic
 import aiosqlite
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI(
     title="Wendy Wedding Planning Server",
-    description="AI-powered wedding planning assistant with guest management and email invitations.",
+    description="AI-powered wedding planning assistant with guest management, email invitations, and venue finding.",
     version="1.0.0"
 )
 
@@ -49,6 +52,14 @@ class UpdateRSVPRequest(BaseModel):
 
 
 class UpdateRSVPResponse(BaseModel):
+    result: str
+
+
+class FindVenuesRequest(BaseModel):
+    location: str
+
+
+class FindVenuesResponse(BaseModel):
     result: str
 
 
@@ -286,6 +297,55 @@ async def update_rsvp(request: UpdateRSVPRequest):
         return UpdateRSVPResponse(
             result=f"❌ Error updating RSVP for {request.email}: {str(e)}"
         )
+
+
+@app.post("/tools/find_venues", response_model=FindVenuesResponse)
+async def find_venues(request: FindVenuesRequest):
+    """
+    Find wedding venues using AI.
+    """
+    try:
+        
+        http_client = httpx.Client(
+        headers={"anthropic-beta":"web-search-2025-03-05"} 
+        )
+        client = anthropic.Anthropic(
+            # defaults to os.environ.get("ANTHROPIC_API_KEY")
+            api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            http_client=http_client
+        )
+
+
+        # Create the message with the beta API and web search tools
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=20000,
+            temperature=1,
+            system="You are an AI agent designed to help with wedding planning. You have access to web search tools to find and gather information about wedding venues in a specified location. Your task is to use these tools effectively and present the results to the user.\n",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"The user is looking for wedding venues in: {request.location}\n\nPlease perform the following tasks:\n1. Use the web search tool to find wedding venues in {request.location}\n2. Select 3-5 top results from the search\n3. For each selected venue:\n   a. Visit the venue's website\n   b. Scrape the following essential information:\n      - Venue name\n      - Address\n      - Email contact\n      - Phone number (if available)\n      - Capacity (if available)\n      - Indoor/outdoor options (if available)\n      - Brief description (1-2 sentences)\n\nPresent the gathered information in the following format:\n\n<venues>\n<venue>\n<name>[Venue Name]</name>\n<address>[Full Address]</address>\n<email>[Email Address]</email>\n<phone>[Phone Number]</phone>\n<capacity>[Capacity Information]</capacity>\n<options>[Indoor/Outdoor Options]</options>\n<description>[Brief Description]</description>\n</venue>\n[Repeat for each venue]\n</venues>\n\nIf you encounter any errors or cannot find sufficient information for a venue, include a note in the <description> tag explaining the issue.\n\nIf you cannot find any suitable venues in the specified location, respond with:\n\n<error>Unable to find wedding venues in {request.location}. Please try a different location or expand your search area.</error>\n\nAfter presenting the venue information, ask the user if they would like more details about any specific venue or if they have any questions about the options presented.\n\nRemember to maintain a helpful and friendly tone throughout the interaction, as wedding planning can be stressful for users."
+                        }
+                    ]
+                }
+            ],
+            tools=[
+                {
+                    "name": "web_search",
+                    "type": "web_search_20250305"
+                }
+            ]
+            
+        )
+        
+        return FindVenuesResponse(result=str(message.content))
+        
+    except Exception as e:
+        return FindVenuesResponse(result=f"❌ Error finding venues: {str(e)}")
 
 
 @app.get("/resources/list_guests", response_model=List[Guest])
