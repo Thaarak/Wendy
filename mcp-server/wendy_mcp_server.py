@@ -20,6 +20,7 @@ import anthropic
 import aiosqlite
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+import openai
 
 app = FastAPI(
     title="Wendy Wedding Planning Server",
@@ -63,6 +64,22 @@ class FindVenuesResponse(BaseModel):
     result: str
 
 
+class VenueReservationRequest(BaseModel):
+    user_name: str
+    user_email: str
+    venue_name: str
+    venue_email: str
+    budget: str
+    guest_count: int
+    date: str
+    special_notes: Optional[str] = None
+
+class VenueReservationResponse(BaseModel):
+    result: str
+    reservation_id: Optional[int] = None
+    error: Optional[str] = None
+
+
 # Database helper class
 class Database:
     """Simple async wrapper for SQLite."""
@@ -101,7 +118,25 @@ class Database:
             )
             """
         )
-
+        # Create venue_reservations table
+        await cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS venue_reservations (
+                id INTEGER PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                user_email TEXT NOT NULL,
+                venue_name TEXT NOT NULL,
+                venue_email TEXT NOT NULL,
+                budget TEXT,
+                guest_count INTEGER,
+                date TEXT,
+                special_notes TEXT,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         await self.conn.commit()
 
     async def add_guest(self, name: str, email: str) -> dict:
@@ -153,6 +188,24 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def add_venue_reservation(self, user_name: str, user_email: str, venue_name: str, venue_email: str, budget: str, guest_count: int, date: str, special_notes: Optional[str], status: str, error_message: Optional[str]) -> dict:
+        """Add a new venue reservation log to the database."""
+        if not self.conn:
+            raise RuntimeError("Database not connected")
+        cursor = await self.conn.cursor()
+        await cursor.execute(
+            """
+            INSERT INTO venue_reservations (user_name, user_email, venue_name, venue_email, budget, guest_count, date, special_notes, status, error_message, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (user_name, user_email, venue_name, venue_email, budget, guest_count, date, special_notes, status, error_message)
+        )
+        await self.conn.commit()
+        reservation_id = cursor.lastrowid
+        await cursor.execute("SELECT * FROM venue_reservations WHERE id = ?", (reservation_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
 
 # Email helper class
 class EmailService:
@@ -197,6 +250,22 @@ class EmailService:
             
         except Exception as e:
             print(f"❌ Failed to send invitation to {to_email}: {e}")
+            return False
+
+    def send_venue_reservation_email(self, to_email: str, subject: str, body: str) -> bool:
+        """Send a venue reservation request email with custom subject and body."""
+        try:
+            msg = MIMEText(body, 'plain')
+            msg['Subject'] = subject
+            msg['From'] = self.smtp_user
+            msg['To'] = to_email
+            with smtplib.SMTP_SSL(self.smtp_host, self.smtp_port) as server:
+                server.login(self.smtp_user, self.smtp_pass)
+                server.send_message(msg)
+            print(f"✅ Venue reservation email sent to {to_email}")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to send venue reservation email to {to_email}: {e}")
             return False
 
 
@@ -379,6 +448,99 @@ async def find_venues(request: FindVenuesRequest):
         
     except Exception as e:
         return FindVenuesResponse(result=f"❌ Error finding venues: {str(e)}")
+
+
+@app.post("/tools/make_venue_reservation", response_model=VenueReservationResponse)
+async def make_venue_reservation(request: VenueReservationRequest):
+    """
+    Make a reservation at a wedding venue by generating an AI-powered email and logging the attempt.
+    """
+    if not db or not email_service:
+        raise HTTPException(status_code=500, detail="Server not initialized")
+    try:
+        # Compose prompt for OpenAI GPT-4o
+        prompt = f"""
+You are an expert wedding planner. Compose a professional wedding venue reservation request email using the following details. Output the subject line on the first line, then a blank line, then the email body.
+
+- Name: {request.user_name}
+- Email: {request.user_email}
+- Venue: {request.venue_name}
+- Date: {request.date}
+- Guest Count: {request.guest_count}
+- Budget: {request.budget}
+"""
+        if request.special_notes:
+            prompt += f"- Special Notes: {request.special_notes}\n"
+        # Call OpenAI GPT-4o
+        openai.api_key = os.environ.get("OPENAI_API_KEY")
+        ai_response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=512,
+            temperature=0.7
+        )
+        ai_text = ai_response.choices[0].message.content.strip()
+        # Split subject and body
+        lines = ai_text.split("\n", 2)
+        subject = lines[0].strip()
+        if len(lines) > 2:
+            body = lines[2].strip()
+        else:
+            body = "\n".join(lines[1:]).strip()
+        # Send reservation email
+        email_sent = email_service.send_venue_reservation_email(
+            to_email=request.venue_email,
+            subject=subject,
+            body=body
+        )
+        status = "success" if email_sent else "failure"
+        error_message = None if email_sent else "Failed to send reservation email."
+        # Log reservation attempt
+        reservation = await db.add_venue_reservation(
+            user_name=request.user_name,
+            user_email=request.user_email,
+            venue_name=request.venue_name,
+            venue_email=request.venue_email,
+            budget=request.budget,
+            guest_count=request.guest_count,
+            date=request.date,
+            special_notes=request.special_notes,
+            status=status,
+            error_message=error_message
+        )
+        if email_sent:
+            return VenueReservationResponse(
+                result=f"✅ Reservation request sent to {request.venue_name} ({request.venue_email})!",
+                reservation_id=reservation["id"] if reservation else None
+            )
+        else:
+            return VenueReservationResponse(
+                result=f"❌ Failed to send reservation request to {request.venue_name}.",
+                reservation_id=reservation["id"] if reservation else None,
+                error=error_message
+            )
+    except Exception as e:
+        # Log failure
+        reservation = await db.add_venue_reservation(
+            user_name=request.user_name,
+            user_email=request.user_email,
+            venue_name=request.venue_name,
+            venue_email=request.venue_email,
+            budget=request.budget,
+            guest_count=request.guest_count,
+            date=request.date,
+            special_notes=request.special_notes,
+            status="failure",
+            error_message=str(e)
+        )
+        return VenueReservationResponse(
+            result=f"❌ Error making reservation for {request.venue_name}: {str(e)}",
+            reservation_id=reservation["id"] if reservation else None,
+            error=str(e)
+        )
 
 
 @app.get("/resources/list_guests", response_model=List[Guest])
