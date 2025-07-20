@@ -28,6 +28,7 @@ class EmailMonitor:
         self.account_email = "wendy.weddingplanning@gmail.com"
         self.agent_orchestrator = None  # Will be set after initialization
         self.seen_message_ids = set()  # Track processed emails
+        self.monitor_thread = None
         
     def authenticate_gmail(self):
         """Authenticate with Gmail API using OAuth2 for Wendy's own account only."""
@@ -252,7 +253,7 @@ class EmailMonitor:
         print(f"✅ Sent confirmation email to {to_email}")
     
     def start_monitoring(self, interval_minutes: int = 5):
-        """Start the email monitoring service for Wendy's own inbox only."""
+        """Start the email monitoring service for Wendy's own inbox only, in a background thread."""
         if self.is_running:
             print("⚠️ Email monitoring is already running")
             return
@@ -261,8 +262,7 @@ class EmailMonitor:
             return
         self.is_running = True
         print(f"🔄 Starting email monitoring for {self.account_email} (checking every {interval_minutes} minutes)")
-        import asyncio
-        self.main_loop = asyncio.get_event_loop()  # Store the main event loop
+        import time
         # On startup, record the latest message's internalDate
         try:
             results = self.service.users().messages().list(userId='me', maxResults=1, q='').execute()
@@ -270,40 +270,28 @@ class EmailMonitor:
                 msg = self.service.users().messages().get(userId='me', id=results['messages'][0]['id'], format='metadata').execute()
                 self.startup_internal_date = int(msg['internalDate'])
             else:
-                import time
                 self.startup_internal_date = int(time.time() * 1000)
             print(f"📅 Only processing emails after: {self.startup_internal_date}")
         except Exception as e:
             print(f"⚠️ Could not determine startup internalDate: {e}")
-            import time
             self.startup_internal_date = int(time.time() * 1000)
-        # Schedule the monitoring task
-        schedule.every(interval_minutes).minutes.do(self.run_check)
-        # Run in a separate thread
-        def run_scheduler():
-            import time
+        # Start the monitoring loop in a background thread
+        def monitor_loop():
+            import asyncio
             while self.is_running:
-                schedule.run_pending()
-                time.sleep(1)
-        self.scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-        self.scheduler_thread.start()
-        # Run initial check
-        if hasattr(self, 'main_loop'):
-            asyncio.run_coroutine_threadsafe(self.check_for_replies(), self.main_loop)
-        else:
-            print("⚠️ No main event loop found for initial async email check")
+                try:
+                    asyncio.run(self.check_for_replies())
+                except Exception as e:
+                    print(f"❌ Error in email monitor loop: {e}")
+                time.sleep(interval_minutes * 60)
+        self.monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        self.monitor_thread.start()
 
-    def run_check(self):
-        """Wrapper to run the async check function from a thread."""
-        import asyncio
-        if hasattr(self, 'main_loop'):
-            asyncio.run_coroutine_threadsafe(self.check_for_replies(), self.main_loop)
-        else:
-            print("⚠️ No main event loop found for async email check")
-    
     def stop_monitoring(self):
         """Stop the email monitoring service."""
         self.is_running = False
+        if self.monitor_thread:
+            self.monitor_thread.join(timeout=2)
         print("🛑 Email monitoring stopped")
     
     async def manual_check(self):
