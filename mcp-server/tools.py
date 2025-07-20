@@ -22,6 +22,9 @@ class SendInviteTool:
         self.smtp_pass = smtp_pass
         self.db = db  # Add db reference for adding guest
     async def run(self, input: Dict[str, Any]) -> Dict[str, Any]:
+        if 'email' not in input or not input['email']:
+            print("❌ send_invite called without an email!")
+            return {"success": False, "message": "No email address provided for invitation."}
         try:
             # Always fetch the latest wedding details from DB right before sending
             details = await self.db.get_wedding_details() if self.db else {"couple_names": "", "wedding_date": "", "location": ""}
@@ -60,6 +63,7 @@ class SendInviteTool:
                 await self.db.add_guest(input.get('name', input['email']), input['email'])
             return {"success": True, "message": f"Invitation sent to {input['email']}"}
         except Exception as e:
+            print(f"❌ Failed to send invitation to {input.get('email')}: {e}")
             return {"success": False, "message": f"Failed to send invitation: {e}"}
 
 # --- Tool: Update RSVP ---
@@ -82,6 +86,7 @@ class UpdateRSVPTool:
             else:
                 return {"success": False, "message": f"Guest not found: {input['email']}"}
         except Exception as e:
+            print(f"❌ Failed to update RSVP for {input.get('email')}: {e}")
             return {"success": False, "message": f"Failed to update RSVP: {e}"}
 
 # --- Tool: List Guests ---
@@ -110,7 +115,7 @@ class ListGuestsTool:
             print("ListGuestsTool returning:", result)
             return result
         except Exception as e:
-            print("ListGuestsTool error:", e)
+            print(f"❌ ListGuestsTool error: {e}")
             return {"guests": [], "error": str(e)}
 
 # --- Tool: Follow Up ---
@@ -133,6 +138,7 @@ class FollowUpTool:
                 await self.email_service.send_follow_up(guest['email'], guest['name'])
             return {"success": True, "message": f"Follow-up emails sent to {len(maybe_guests)} guests"}
         except Exception as e:
+            print(f"❌ Failed to send follow-ups: {e}")
             return {"success": False, "message": f"Failed to send follow-ups: {e}"}
 
 # --- Tool: Process Email Response ---
@@ -181,6 +187,7 @@ class ProcessEmailResponseTool:
             else:
                 return {"success": False, "message": f"Low confidence or no RSVP found: {result}"}
         except Exception as e:
+            print(f"❌ Failed to process email response for {input.get('sender_email')}: {e}")
             return {"success": False, "message": f"Failed to process email: {e}"}
 
 # --- Tool: Update Wedding Details ---
@@ -207,6 +214,7 @@ class UpdateWeddingDetailsTool:
             await self.db.set_wedding_details(couple_names, wedding_date, location)
             return {"success": True, "message": "Wedding details updated!"}
         except Exception as e:
+            print(f"❌ Failed to update wedding details: {e}")
             return {"success": False, "message": f"Failed to update wedding details: {e}"}
 
 # --- Tool Registry ---

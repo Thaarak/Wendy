@@ -31,6 +31,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# lifespan fucntion here and then pass it into enrichmcp and then pass it into the agent orchestrator
+
 # Add test_db endpoint here
 @app.get("/test_db")
 async def test_db():
