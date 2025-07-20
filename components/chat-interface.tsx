@@ -15,6 +15,7 @@ interface ChatInterfaceProps {
 export function ChatInterface({ messages }: ChatInterfaceProps) {
   const { dispatch } = useWendyState()
   const [inputValue, setInputValue] = useState("")
+  const [context, setContext] = useState<any>(null) // Persist context between messages
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = () => {
@@ -38,12 +39,12 @@ export function ChatInterface({ messages }: ChatInterfaceProps) {
 
     dispatch({ type: "add_message", payload: userMessage })
 
-    // API integration - POST /api/chat with user message
+    // API integration - POST /api/chat with user message and context
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: inputValue }),
+        body: JSON.stringify({ message: inputValue, context }),
       })
       const data = await res.json()
       const aiResponse: Message = {
@@ -53,6 +54,7 @@ export function ChatInterface({ messages }: ChatInterfaceProps) {
         ts: new Date().toISOString(),
       }
       dispatch({ type: "add_message", payload: aiResponse })
+      setContext(data.context || null) // Update context for next message
     } catch (err) {
       const errorResponse: Message = {
         id: (Date.now() + 2).toString(),

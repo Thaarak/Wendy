@@ -17,12 +17,11 @@ class AgentOrchestrator:
     async def handle_event(self, message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Receives a message and context, sends to OpenAI with tool schema, executes selected tool(s), returns result.
+        Implements automatic retry: if a tool call fails due to missing wedding details, stores the original tool call in context. After a successful update_wedding_details call, retries the original tool call.
         """
         tools = self.tool_registry.get_tools()
         functions = []
         for tool in tools:
-            # Build OpenAI function schema from tool description
-            # For list_guests, specify rsvp_filter argument
             if tool.name == "list_guests":
                 functions.append({
                     "name": tool.name,
@@ -50,7 +49,6 @@ class AgentOrchestrator:
         ]
         if context:
             messages.append({"role": "system", "content": f"Context: {json.dumps(context)}"})
-        # Call OpenAI with function calling
         response = await self.openai_client.chat.completions.create(
             model="gpt-3.5-turbo-1106",
             messages=messages,
@@ -65,20 +63,43 @@ class AgentOrchestrator:
             tool = self.tool_registry.get_tool_by_name(tool_name)
             if tool:
                 result = await tool.run(tool_args)
-                # If the result is not a string, ask OpenAI to summarize it in natural language
+                # Check for missing wedding details error from send_invite
+                if tool_name == "send_invite" and isinstance(result, dict) and not result.get("success") and "wedding details" in result.get("message", ""):
+                    # Store the original intent in context
+                    if context is None:
+                        context = {}
+                    context["pending_tool_call"] = {"tool_name": tool_name, "tool_args": tool_args}
+                    # Prompt user for missing details
+                    return {"reply": result["message"], "context": context}
+                # If we just updated wedding details and have a pending tool call, retry it
+                if tool_name == "update_wedding_details" and context and context.get("pending_tool_call"):
+                    pending = context.pop("pending_tool_call")
+                    pending_tool = self.tool_registry.get_tool_by_name(pending["tool_name"])
+                    if pending_tool:
+                        retry_result = await pending_tool.run(pending["tool_args"])
+                        # Summarize retry result
+                        if not isinstance(retry_result, str):
+                            summary_prompt = f"You are Wendy, an AI wedding planner. Here is the result of a tool call: {json.dumps(retry_result)}. Please summarize or present this information in a friendly, natural language reply for the user."
+                            summary_response = await self.openai_client.chat.completions.create(
+                                model="gpt-3.5-turbo-1106",
+                                messages=[{"role": "user", "content": summary_prompt}],
+                            )
+                            summary_text = summary_response.choices[0].message.content
+                            return {"reply": summary_text, "context": context}
+                        else:
+                            return {"reply": retry_result, "context": context}
+                # Normal tool call result
                 if not isinstance(result, str):
-                    # Use OpenAI to summarize the result as a natural language reply
                     summary_prompt = f"You are Wendy, an AI wedding planner. Here is the result of a tool call: {json.dumps(result)}. Please summarize or present this information in a friendly, natural language reply for the user."
                     summary_response = await self.openai_client.chat.completions.create(
                         model="gpt-3.5-turbo-1106",
                         messages=[{"role": "user", "content": summary_prompt}],
                     )
                     summary_text = summary_response.choices[0].message.content
-                    return {"reply": summary_text}
+                    return {"reply": summary_text, "context": context}
                 else:
-                    return {"reply": result}
+                    return {"reply": result, "context": context}
             else:
                 return {"error": f"Tool not found: {tool_name}"}
         else:
-            # No function call, just return the message
-            return {"reply": choice.message.content} 
+            return {"reply": choice.message.content, "context": context} 
