@@ -6,18 +6,8 @@ import json
 from datetime import datetime
 import os
 import httpx
-<<<<<<< Updated upstream
-import re
-import os
-import httpx
 import anthropic
 import re
-from dotenv import load_dotenv
-load_dotenv()
-=======
-import anthropic
-import re
->>>>>>> Stashed changes
 
 # --- Tool: Send Invite ---
 class SendInviteTool:
@@ -307,121 +297,11 @@ class FindVenuesTool:
             if not self.anthropic_api_key:
                 return {"success": False, "message": "ANTHROPIC_API_KEY not set in environment.", "venues": []}
 
-<<<<<<< Updated upstream
-            http_client = httpx.Client(
-                headers={
-                    "anthropic-beta": "web-search-2025-03-05",
-                    "anthropic-version": "2023-06-01"
-                }
-            )
-            client = anthropic.Anthropic(
-                api_key=self.anthropic_api_key,
-                http_client=http_client,
-                default_headers={
-                    "anthropic-version": "2023-06-01",
-                    "anthropic-beta": "web-search-2025-03-05"
-                }
-            )
-
-            prompt = f"""
-The user is looking for wedding venues in: {location}
-
-Please perform the following tasks:
-1. Use the web search tool to find wedding venues in {location}.
-2. Select 3 top results from the search. Only include venues that have a real, valid, working email contact for reservations or inquiries. The email must be present on the venue's official website. Do not include venues that only have a web form or no email address.
-3. For each selected venue:
-   a. Visit the venue's official website.
-   b. Scrape the following essential information:
-       - Venue name
-       - Address
-       - Email contact (must be a real, working email address for the venue; skip venues without one)
-       - Phone number (if available)
-       - Capacity (if available)
-       - Website URL (must be the official venue website)
-
-Important rules:
-- Only include venues with a real, working email address for reservations or inquiries. Do not include venues with missing, generic, or web form-only contacts.
-- The email must be scraped from the venue's official website and should be a direct contact for the venue (not a third-party or aggregator).
-- If you cannot find a valid email for a venue, skip that venue and select another.
-- If you cannot find at least one suitable venue with a valid email in the specified location, respond with:
-
-<error>Unable to find wedding venues in {location} with a valid email contact. Please try a different location or expand your search area.</error>
-
-Present the gathered information in the following format only and nothing else. Do not show your reasoning, planning, or any intermediate steps:
-
-<venues>
-<venue>
-<name>[Venue Name]</name>
-<address>[Full Address]</address>
-<email>[Email Address]</email>
-<phone>[Phone Number]</phone>
-<capacity>[Capacity Information]</capacity>
-<website>[Website URL]</website>
-</venue>
-[Repeat for each venue]
-</venues>
-"""
-
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                temperature=1,
-                system="You are an AI agent designed to help with wedding planning. You have access to a tool which performs web searches to find and gather information about wedding venues in a specified location. Respond only with the final answer relevant to the user query. Do not show your reasoning, planning, or any intermediate steps. Format the response clearly with Markdown headings and bullet points as appropriate.",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ],
-                tools=[
-                    {
-                        "name": "web_search",
-                        "type": "web_search_20250305",
-                        "max_uses": 5
-                    }
-                ]
-            )
-
-            result = str(message.content)
-            venues = []
-            venues_match = re.search(r"<venues>([\s\S]*?)</venues>", result)
-            if venues_match:
-                venues_block = venues_match.group(1)
-                venue_regex = re.compile(r"<venue>([\s\S]*?)</venue>")
-                for match in venue_regex.finditer(venues_block):
-                    venue_xml = match.group(1)
-                    def extract(tag):
-                        m = re.search(rf"<{tag}>([\s\S]*?)</{tag}>", venue_xml)
-                        return m.group(1).strip() if m else ""
-                    venues.append({
-                        "name": extract("name"),
-                        "address": extract("address"),
-                        "email": extract("email"),
-                        "phone": extract("phone"),
-                        "capacity": extract("capacity"),
-                        "website": extract("website"),
-                    })
-            elif "<error>" in result:
-                return {"success": False, "venues": [], "message": result}
-            else:
-                return {"success": False, "venues": [], "message": "No venues found in response."}
-
-            return {
-                "success": True,
-                "venues": venues,
-                "message": f"Found {len(venues)} venues in {location}."
-=======
             url = "https://api.anthropic.com/v1/messages"
             headers = {
                 "x-api-key": self.anthropic_api_key,
                 "anthropic-beta": "web-search-2025-03-05",
                 "content-type": "application/json"
->>>>>>> Stashed changes
             }
             prompt = f"""
 The user is looking for wedding venues in: {location}
